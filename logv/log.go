@@ -1,0 +1,297 @@
+//
+// log.go
+// Copyright (C) 2025 veypi <i@veypi.com>
+// 2025-07-15 15:37
+// Distributed under terms of the MIT license.
+//
+
+package logv
+
+// 封装自 zero log
+
+import (
+	"fmt"
+	"runtime"
+	"strconv"
+
+	"github.com/rs/zerolog"
+	"gopkg.in/natefinch/lumberjack.v2"
+)
+
+type Level int8
+
+const (
+	// DebugLevel defines debug log level.
+	DebugLevel Level = iota
+	// InfoLevel defines info log level.
+	InfoLevel
+	// WarnLevel defines warn log level.
+	WarnLevel
+	// ErrorLevel defines error log level.
+	ErrorLevel
+	// FatalLevel defines fatal log level.
+	FatalLevel
+	// PanicLevel defines panic log level.
+	PanicLevel
+	// NoLevel defines an absent log level.
+	NoLevel
+	// Disabled disables the logger.
+	Disabled
+
+	// TraceLevel defines trace log level.
+	TraceLevel Level = -1
+)
+
+func (l Level) String() string {
+	return zerolog.Level(l).String()
+}
+
+func SetLevel(l Level) {
+	zerolog.SetGlobalLevel(zerolog.Level(l))
+}
+
+func ParseLevel(s string) (Level, error) {
+	l, e := zerolog.ParseLevel(s)
+	return Level(l), e
+}
+
+var (
+	enableCaller bool = true
+)
+
+func DisableCaller() {
+	enableCaller = false
+	SetLogger(originLoger)
+}
+
+var fileHook = lumberjack.Logger{
+	Filename:   "",
+	MaxSize:    128, // 每个日志文件保存的最大尺寸 单位：M
+	MaxBackups: 10,  // 日志文件最多保存多少个备份
+	MaxAge:     60,  // 文件最多保存多少天
+	LocalTime:  true,
+	Compress:   true, // 是否压缩
+}
+
+// Logger just for dev env, low performance but human-friendly
+var originLoger *zerolog.Logger
+var logger zerolog.Logger
+var WithDeepCaller zerolog.Logger
+var WithNoCaller zerolog.Logger
+
+var Print = logger.Print
+var Println = logger.Print
+var Printf = logger.Printf
+
+func init() {
+	// 输出trace信息，err以上级别调用Err或者Errs使触发
+	zerolog.ErrorStackMarshaler = func(err error) interface{} {
+		return string(PanicTrace())
+	}
+	SetLogger(ConsoleLogger())
+}
+
+func SetLogger(l *zerolog.Logger) {
+	originLoger = l
+	if enableCaller {
+		logger = l.With().Timestamp().CallerWithSkipFrameCount(2).Logger()
+		WithDeepCaller = l.With().Timestamp().CallerWithSkipFrameCount(3).Logger()
+	} else {
+		logger = l.With().Timestamp().Logger()
+		WithDeepCaller = l.With().Timestamp().Logger()
+	}
+	WithNoCaller = l.With().Timestamp().Logger()
+	Print = WithNoCaller.Print
+	Println = WithNoCaller.Println
+	Printf = WithNoCaller.Printf
+}
+
+func Caller(depth uint) *zerolog.Logger {
+	l := originLoger.With().Timestamp().CallerWithSkipFrameCount(int(depth) + 1).Logger()
+	return &l
+}
+
+// FileLogger for product, height performance
+func FileLogger(fileName string) *zerolog.Logger {
+	// 会创建644权限文件夹，导致其他用户无法读取
+	fileHook.Filename = fileName
+	l := zerolog.New(&fileHook).With().Caller().Timestamp().Logger()
+	return &l
+}
+
+func ConsoleLogger() *zerolog.Logger {
+	cl := zerolog.NewConsoleWriter(func(w *zerolog.ConsoleWriter) {
+		w.FormatFieldValue = func(i interface{}) string {
+			switch i := i.(type) {
+			case string:
+				s, e := strconv.Unquote(i)
+				if e != nil {
+					return i
+				}
+				return s
+			default:
+				return fmt.Sprintf("%s", i)
+			}
+		}
+	})
+	// if runtime.GOOS == "windows" {
+	// 	cl.NoColor = true
+	// }
+	l := zerolog.New(cl)
+	return &l
+}
+func ConsoleLoggerWithOutColor() *zerolog.Logger {
+	cl := zerolog.NewConsoleWriter()
+	cl.NoColor = true
+	l := zerolog.New(cl)
+	return &l
+}
+
+func HandlerErrs(errs ...error) {
+	for _, e := range errs {
+		if e != nil {
+			WithDeepCaller.Warn().Msg(e.Error())
+		}
+	}
+}
+
+// Trace starts a new message with trace level.
+//
+// You must call Msg on the returned event in order to send the event.
+func Trace() *zerolog.Event {
+	return logger.Trace()
+}
+
+// Debug starts a new message with debug level.
+//
+// You must call Msg on the returned event in order to send the event.
+func Debug() *zerolog.Event {
+	return logger.Debug()
+}
+
+// Info starts a new message with info level.
+//
+// You must call Msg on the returned event in order to send the event.
+func Info() *zerolog.Event {
+	return logger.Info()
+}
+
+// Warn starts a new message with warn level.
+//
+// You must call Msg on the returned event in order to send the event.
+func Warn() *zerolog.Event {
+	return logger.Warn()
+}
+
+// Error starts a new message with error level.
+//
+// You must call Msg on the returned event in order to send the event.
+func Error() *zerolog.Event {
+	return logger.Error()
+}
+
+// Fatal starts a new message with fatal level. The os.Exit(1) function
+// is called by the Msg method.
+//
+// You must call Msg on the returned event in order to send the event.
+func Fatal() *zerolog.Event {
+	return logger.Fatal()
+}
+
+// Panic starts a new message with panic level. The message is also sent
+// to the panic function.
+//
+// You must call Msg on the returned event in order to send the event.
+func Panic() *zerolog.Event {
+	return logger.Panic()
+}
+
+// Log starts a new message with no level. Setting zerolog.GlobalLevel to
+// zerolog.Disabled will still disable events produced by this method.
+//
+// You must call Msg on the returned event in order to send the event.
+func Log() *zerolog.Event {
+	return logger.Log()
+}
+
+func PanicTrace() []byte {
+	buf := make([]byte, 10240)
+	n := runtime.Stack(buf, false)
+	if n > 0 {
+		count := 0
+		for i, v := range buf[:n] {
+			if v == '\n' {
+				count++
+				if count == 11 {
+					return buf[i:n]
+				}
+			}
+		}
+	}
+	return buf[:n]
+}
+
+func RecoverErr() error {
+	if e := recover(); e != nil {
+		if e, ok := e.(error); ok {
+			return e
+		}
+		return fmt.Errorf("%v", e)
+	}
+	return nil
+}
+
+func TraceError(err ...error) {
+	for _, e := range err {
+		if e != nil {
+			WithDeepCaller.Warn().Err(e).Send()
+		}
+	}
+}
+
+func TraceFuncErr[T any](res T, e error) T {
+	if e != nil {
+		WithDeepCaller.Warn().Err(e).Send()
+	}
+	return res
+}
+
+func Assert(guard bool, text string) {
+	if !guard {
+		if enableCaller {
+			_, f, line, _ := runtime.Caller(1)
+			panic(fmt.Sprintf("%s:%d %v", f, line, text))
+		} else {
+			panic(text)
+		}
+	}
+}
+
+func AssertError(e error, text ...string) {
+	if e != nil {
+		if enableCaller {
+			_, f, line, _ := runtime.Caller(1)
+			if len(text) == 0 {
+				panic(fmt.Errorf("%s:%d %w", f, line, e))
+			}
+			panic(fmt.Errorf("%s:%d %w:%s", f, line, e, text[0]))
+		} else {
+			if len(text) == 0 {
+				panic(e)
+			}
+			panic(fmt.Errorf("%w:%s", e, text[0]))
+		}
+	}
+}
+
+func AssertFuncErr[T any](res T, e error) T {
+	if e != nil {
+		if enableCaller {
+			_, f, line, _ := runtime.Caller(1)
+			panic(fmt.Errorf("%s:%d %w", f, line, e))
+		} else {
+			panic(e)
+		}
+	}
+	return res
+}

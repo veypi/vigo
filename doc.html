@@ -1,0 +1,898 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Vigo API Documentation</title>
+  <style>
+    :root {
+      --primary: #2563eb;
+      --bg: #f8fafc;
+      --surface: #ffffff;
+      --border: #e2e8f0;
+      --text: #0f172a;
+      --text-light: #64748b;
+      --method-get: #3b82f6;
+      --method-post: #22c55e;
+      --method-put: #f59e0b;
+      --method-delete: #ef4444;
+      --method-patch: #06b6d4;
+      --radius: 8px;
+      --shadow: 0 1px 3px 0 rgb(0 0 0 / 0.1), 0 1px 2px -1px rgb(0 0 0 / 0.1);
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--text);
+      padding-bottom: 50px;
+    }
+
+    /* Header */
+    header {
+      background: var(--surface);
+      border-bottom: 1px solid var(--border);
+      padding: 0 20px;
+      height: 60px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      position: sticky;
+      top: 0;
+      z-index: 10;
+    }
+
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      font-weight: bold;
+      font-size: 1.2rem;
+      color: var(--text);
+      text-decoration: none;
+    }
+
+    .brand span {
+      color: var(--primary);
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+    }
+
+    /* Search */
+    .search-box {
+      position: relative;
+    }
+
+    .search-box input {
+      padding: 8px 12px 8px 35px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--bg);
+      width: 300px;
+      outline: none;
+      transition: border-color 0.2s;
+    }
+
+    .search-box input:focus {
+      border-color: var(--primary);
+    }
+
+    .search-icon {
+      position: absolute;
+      left: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 16px;
+      height: 16px;
+      color: var(--text-light);
+    }
+
+    /* Buttons */
+    .btn {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 8px 12px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      background: var(--surface);
+      cursor: pointer;
+      font-size: 0.9rem;
+      color: var(--text);
+      transition: all 0.2s;
+    }
+
+    .btn:hover {
+      background: var(--bg);
+      border-color: var(--text-light);
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+      border-color: var(--primary);
+    }
+
+    .btn-primary:hover {
+      background: #1d4ed8;
+      border-color: #1d4ed8;
+    }
+
+    .btn-icon {
+      padding: 8px;
+      border: none;
+      background: transparent;
+      color: var(--text-light);
+    }
+
+    .btn-icon:hover {
+      color: var(--primary);
+      background: #eff6ff;
+    }
+
+    /* Main Content */
+    main {
+      max-width: 1000px;
+      margin: 20px auto;
+      padding: 0 20px;
+    }
+
+    /* API List */
+    .api-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .api-item {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+      transition: box-shadow 0.2s;
+    }
+
+    .api-item:hover {
+      box-shadow: var(--shadow);
+    }
+
+    .api-header {
+      display: flex;
+      align-items: center;
+      padding: 15px;
+      cursor: pointer;
+      gap: 15px;
+    }
+
+    .method {
+      font-weight: bold;
+      font-size: 0.8rem;
+      padding: 4px 8px;
+      border-radius: 4px;
+      color: white;
+      min-width: 60px;
+      text-align: center;
+    }
+
+    .method.GET {
+      background: var(--method-get);
+    }
+
+    .method.POST {
+      background: var(--method-post);
+    }
+
+    .method.PUT {
+      background: var(--method-put);
+    }
+
+    .method.DELETE {
+      background: var(--method-delete);
+    }
+
+    .method.PATCH {
+      background: var(--method-patch);
+    }
+
+    .path {
+      font-family: monospace;
+      font-size: 1rem;
+      flex: 1;
+      color: var(--text);
+    }
+
+    .summary {
+      color: var(--text-light);
+      font-size: 0.9rem;
+      margin-right: 10px;
+    }
+
+    .api-details {
+      border-top: 1px solid var(--border);
+      padding: 20px;
+      background: #fdfdfd;
+      display: none;
+    }
+
+    .api-details.open {
+      display: block;
+    }
+
+    .section-title {
+      font-weight: 600;
+      margin-bottom: 10px;
+      font-size: 0.9rem;
+      color: var(--text-light);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .params-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-bottom: 20px;
+      font-size: 0.9rem;
+    }
+
+    .params-table th,
+    .params-table td {
+      text-align: left;
+      padding: 8px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .params-table th {
+      color: var(--text-light);
+      font-weight: 500;
+    }
+
+    .badge {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 0.75rem;
+      background: #eee;
+      color: #555;
+    }
+
+    .badge.required {
+      background: #fee2e2;
+      color: #991b1b;
+    }
+
+    /* Modal */
+    .modal-overlay {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      z-index: 100;
+      opacity: 0;
+      pointer-events: none;
+      transition: opacity 0.2s;
+    }
+
+    .modal-overlay.active {
+      opacity: 1;
+      pointer-events: auto;
+    }
+
+    .modal {
+      background: var(--surface);
+      border-radius: var(--radius);
+      width: 90%;
+      max-width: 800px;
+      max-height: 90vh;
+      display: flex;
+      flex-direction: column;
+      box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1);
+    }
+
+    .modal-header {
+      padding: 15px 20px;
+      border-bottom: 1px solid var(--border);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-weight: bold;
+    }
+
+    .modal-body {
+      padding: 20px;
+      overflow-y: auto;
+      flex: 1;
+    }
+
+    .modal-footer {
+      padding: 15px 20px;
+      border-top: 1px solid var(--border);
+      display: flex;
+      justify-content: flex-end;
+      gap: 10px;
+    }
+
+    /* Env Modal Specifics */
+    .env-row {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .env-row input {
+      flex: 1;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+    }
+
+    /* Request Modal Specifics */
+    .req-field {
+      margin-bottom: 15px;
+    }
+
+    .req-label {
+      display: block;
+      margin-bottom: 5px;
+      font-weight: 500;
+      font-size: 0.9rem;
+    }
+
+    .req-input {
+      width: 100%;
+      padding: 8px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-family: monospace;
+    }
+
+    .req-row {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 5px;
+    }
+
+    .req-row input {
+      flex: 1;
+      padding: 6px;
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      font-size: 0.9rem;
+    }
+
+    .tabs {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 10px;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .tab {
+      padding: 8px 12px;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+    }
+
+    .tab.active {
+      border-bottom-color: var(--primary);
+      color: var(--primary);
+      font-weight: 500;
+    }
+
+    .tab-content {
+      display: none;
+    }
+
+    .tab-content.active {
+      display: block;
+    }
+
+    pre {
+      background: #f1f5f9;
+      padding: 15px;
+      border-radius: var(--radius);
+      overflow-x: auto;
+      font-size: 0.9rem;
+    }
+
+    .code-editor {
+      min-height: 150px;
+      font-family: monospace;
+    }
+
+    /* Utilities */
+    .hidden {
+      display: none;
+    }
+
+    .text-sm {
+      font-size: 0.875rem;
+    }
+
+    .text-mono {
+      font-family: monospace;
+    }
+
+    .flex-col {
+      display: flex;
+      flex-direction: column;
+    }
+  </style>
+</head>
+
+<body>
+
+  <header>
+    <a href="#" class="brand">
+      <span>Vigo</span> API Docs
+    </a>
+
+    <div class="search-box">
+      <svg class="search-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="11" cy="11" r="8"></circle>
+        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
+      </svg>
+      <input type="text" id="searchInput" placeholder="Search paths, summary...">
+    </div>
+
+    <div class="actions">
+      <button class="btn" onclick="openEnvModal()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <path d="M4 17l6-6-6-6"></path>
+          <path d="M12 19h8"></path>
+        </svg>
+        Env
+      </button>
+      <a href="https://github.com/veypi/vigo" target="_blank" class="btn btn-icon" title="GitHub">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor">
+          <path
+            d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z" />
+        </svg>
+      </a>
+    </div>
+  </header>
+
+  <main>
+    <div id="apiList" class="api-list">
+      <!-- API Items will be injected here -->
+      <div class="text-center" style="padding: 40px; color: #888;">Loading API definition...</div>
+    </div>
+  </main>
+
+  <!-- Env Modal -->
+  <div id="envModal" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <span>Environment Variables</span>
+        <button class="btn-icon" onclick="closeModal('envModal')">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-sm" style="margin-bottom: 15px; color: #666;">Variables stored in localStorage. Use in
+          paths/headers/body as <code>&#123;&#123;KEY&#125;&#125;</code>.</p>
+        <div id="envList"></div>
+        <button class="btn" onclick="addEnvRow()" style="margin-top: 10px;">+ Add Variable</button>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeModal('envModal')">Cancel</button>
+        <button class="btn btn-primary" onclick="saveEnvs()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Request Modal -->
+  <div id="reqModal" class="modal-overlay">
+    <div class="modal" style="height: 90vh;">
+      <div class="modal-header">
+        <span id="reqTitle">Send Request</span>
+        <button class="btn-icon" onclick="closeModal('reqModal')">✕</button>
+      </div>
+      <div class="modal-body">
+        <div class="req-field">
+          <div style="display: flex; gap: 10px;">
+            <select id="reqMethod" class="req-input" style="width: 100px; font-weight: bold;">
+              <option>GET</option>
+              <option>POST</option>
+              <option>PUT</option>
+              <option>DELETE</option>
+              <option>PATCH</option>
+            </select>
+            <input id="reqUrl" class="req-input" placeholder="URL path">
+          </div>
+        </div>
+
+        <div class="tabs">
+          <div class="tab active" onclick="switchTab(this, 'tabParams')">Params</div>
+          <div class="tab" onclick="switchTab(this, 'tabHeaders')">Headers</div>
+          <div class="tab" onclick="switchTab(this, 'tabBody')">Body</div>
+        </div>
+
+        <div id="tabParams" class="tab-content active">
+          <div id="reqParamsList"></div>
+        </div>
+
+        <div id="tabHeaders" class="tab-content">
+          <div id="reqHeadersList"></div>
+          <button class="btn text-sm" onclick="addReqHeaderRow()">+ Add Header</button>
+        </div>
+
+        <div id="tabBody" class="tab-content">
+          <textarea id="reqBodyEditor" class="req-input code-editor" placeholder="JSON or raw body"></textarea>
+          <div class="text-sm" style="margin-top: 5px; color: #666;">Content-Type: <span
+              id="reqContentType">application/json</span></div>
+        </div>
+
+        <div style="margin-top: 20px; border-top: 1px solid var(--border); padding-top: 10px;">
+          <div class="section-title">Response</div>
+          <div id="reqResponseStatus" class="text-sm" style="margin-bottom: 5px;"></div>
+          <pre id="reqResponseBody" style="max-height: 200px; overflow: auto;">No request sent yet.</pre>
+        </div>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeModal('reqModal')">Close</button>
+        <button class="btn btn-primary" onclick="sendRequest()">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            style="margin-right: 5px;">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+          Send
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // Configuration
+    const API_JSON_URL = "{{.}}"; // Injected by Go template
+    let apiData = null;
+    let envs = JSON.parse(localStorage.getItem('vigo_envs') || '{}');
+
+    // DOM Elements
+    const apiListEl = document.getElementById('apiList');
+    const searchInput = document.getElementById('searchInput');
+
+    // Init
+    async function init() {
+      try {
+        const res = await fetch(API_JSON_URL + '?mode=full');
+        apiData = await res.json();
+        renderApiList(apiData.routes);
+      } catch (e) {
+        apiListEl.innerHTML = `<div style="color:red; text-align:center;">Failed to load API docs: ${e.message}</div>`;
+      }
+    }
+
+    // Render List
+    function renderApiList(routes) {
+      apiListEl.innerHTML = '';
+      if (!routes || routes.length === 0) {
+        apiListEl.innerHTML = '<div class="text-center" style="padding: 20px;">No routes found</div>';
+        return;
+      }
+
+      routes.forEach((route, index) => {
+        const item = document.createElement('div');
+        item.className = 'api-item';
+
+        // Params HTML
+        let paramsHtml = '';
+        if (route.params && route.params.length > 0) {
+          paramsHtml = `
+                    <div class="section-title">Parameters</div>
+                    <table class="params-table">
+                        <thead><tr><th>Name</th><th>In</th><th>Type</th><th>Required</th><th>Desc</th></tr></thead>
+                        <tbody>
+                            ${route.params.map(p => `
+                                <tr>
+                                    <td>${p.name}</td>
+                                    <td><span class="badge">${p.in}</span></td>
+                                    <td><code>${p.type}</code></td>
+                                    <td>${p.required ? '<span class="badge required">Yes</span>' : 'No'}</td>
+                                    <td>${p.desc || '-'}</td>
+                                </tr>
+                            `).join('')}
+                        </tbody>
+                    </table>`;
+        }
+
+        // Body HTML
+        let bodyHtml = '';
+        if (route.body && route.body.fields) {
+          bodyHtml = `
+                    <div class="section-title">Request Body (${route.body.content_type})</div>
+                    <table class="params-table">
+                        <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Desc</th></tr></thead>
+                        <tbody>
+                            ${renderBodyFields(route.body.fields)}
+                        </tbody>
+                    </table>`;
+        }
+
+        item.innerHTML = `
+                <div class="api-header" onclick="toggleDetails(${index})">
+                    <span class="method ${route.method}">${route.method}</span>
+                    <span class="path">${route.path}</span>
+                    <span class="summary">${route.summary || ''}</span>
+                    <button class="btn-icon" onclick="event.stopPropagation(); openReqModal(${index})" title="Send Request">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                    </button>
+                </div>
+                <div class="api-details" id="details-${index}">
+                    ${paramsHtml}
+                    ${bodyHtml}
+                    ${route.response ? `<div class="section-title">Response</div><pre>${JSON.stringify(route.response, null, 2)}</pre>` : ''}
+                </div>
+            `;
+        apiListEl.appendChild(item);
+      });
+    }
+
+    function renderBodyFields(fields, prefix = '') {
+      return fields.map(f => `
+            <tr>
+                <td>${prefix}${f.name}</td>
+                <td><code>${f.type}</code></td>
+                <td>${f.required ? '<span class="badge required">Yes</span>' : 'No'}</td>
+                <td>${f.desc || '-'}</td>
+            </tr>
+            ${f.fields ? renderBodyFields(f.fields, prefix + f.name + '.') : ''}
+        `).join('');
+    }
+
+    function toggleDetails(index) {
+      const el = document.getElementById(`details-${index}`);
+      el.classList.toggle('open');
+    }
+
+    // Search
+    searchInput.addEventListener('input', (e) => {
+      const term = e.target.value.toLowerCase();
+      if (!apiData) return;
+      const filtered = apiData.routes.filter(r =>
+        r.path.toLowerCase().includes(term) ||
+        (r.summary && r.summary.toLowerCase().includes(term))
+      );
+      renderApiList(filtered);
+    });
+
+    // Env Modal Logic
+    function openEnvModal() {
+      const list = document.getElementById('envList');
+      list.innerHTML = '';
+      Object.entries(envs).forEach(([k, v]) => addEnvRow(k, v));
+      if (Object.keys(envs).length === 0) addEnvRow();
+      document.getElementById('envModal').classList.add('active');
+    }
+
+    function addEnvRow(key = '', val = '') {
+      const div = document.createElement('div');
+      div.className = 'env-row';
+      div.innerHTML = `
+            <input placeholder="Key" value="${key}" class="env-key">
+            <input placeholder="Value" value="${val}" class="env-val">
+            <button class="btn-icon" onclick="this.parentElement.remove()">🗑</button>
+        `;
+      document.getElementById('envList').appendChild(div);
+    }
+
+    function saveEnvs() {
+      const newEnvs = {};
+      document.querySelectorAll('.env-row').forEach(row => {
+        const k = row.querySelector('.env-key').value.trim();
+        const v = row.querySelector('.env-val').value.trim();
+        if (k) newEnvs[k] = v;
+      });
+      envs = newEnvs;
+      localStorage.setItem('vigo_envs', JSON.stringify(envs));
+      closeModal('envModal');
+    }
+
+    // Request Modal Logic
+    let currentRoute = null;
+
+    function openReqModal(index) {
+      currentRoute = apiData.routes[index]; // Use current filtered list? ideally use original index or pass route object. 
+      // Re-find route if using filtered list
+      // Simplified: assumes renderApiList passes index from filtered list which matches if we store filtered list.
+      // Better: renderApiList should pass the route object or ID. 
+      // For now, let's just grab from DOM or pass the route directly. 
+      // Wait, renderApiList uses index from the array it's iterating. If filtered, index 0 is first filtered item.
+      // Need to be careful. Let's fix render logic to pass the route object via a global map or just use the filtered list bound to the index.
+      // Actually, let's just fix the handler in render to pass the route object. 
+      // We can't pass object easily in onclick string. 
+      // Let's rely on the fact that we can search for it or just keep it simple: 
+      // We will store the current rendered routes in a global variable `currentRoutes`.
+
+      // Correct approach:
+      const route = document.querySelectorAll('.api-item')[index] ? currentRouteList[index] : null;
+      if (!route) return;
+
+      currentRoute = route;
+
+      document.getElementById('reqTitle').innerText = `Send ${route.method} ${route.path}`;
+      document.getElementById('reqMethod').value = route.method;
+      document.getElementById('reqUrl').value = route.path;
+
+      // Params
+      const paramsList = document.getElementById('reqParamsList');
+      paramsList.innerHTML = '';
+      if (route.params) {
+        route.params.forEach(p => {
+          const row = document.createElement('div');
+          row.className = 'req-row';
+          row.innerHTML = `<label style="width:100px; padding-top:6px;">${p.name} (${p.in})</label>
+                                 <input class="req-param-input" data-in="${p.in}" data-name="${p.name}" placeholder="${p.desc || ''}">`;
+          paramsList.appendChild(row);
+        });
+      } else {
+        paramsList.innerHTML = '<div class="text-sm text-center">No parameters</div>';
+      }
+
+      // Headers
+      document.getElementById('reqHeadersList').innerHTML = '';
+      addReqHeaderRow('Content-Type', route.body?.content_type || 'application/json');
+
+      // Body
+      document.getElementById('reqBodyEditor').value = '';
+      if (route.body && route.body.fields) {
+        // Generate dummy JSON
+        const dummy = generateDummyBody(route.body.fields);
+        document.getElementById('reqBodyEditor').value = JSON.stringify(dummy, null, 2);
+        document.getElementById('reqContentType').innerText = route.body.content_type;
+      }
+
+      document.getElementById('reqResponseStatus').innerText = '';
+      document.getElementById('reqResponseBody').innerText = 'Ready to send...';
+
+      document.getElementById('reqModal').classList.add('active');
+    }
+
+    // Patch renderApiList to update global list
+    let currentRouteList = [];
+    const originalRender = renderApiList;
+    renderApiList = function (routes) {
+      currentRouteList = routes;
+      originalRender(routes);
+    }
+
+    function generateDummyBody(fields) {
+      const obj = {};
+      fields.forEach(f => {
+        if (f.type === 'object' && f.fields) {
+          obj[f.name] = generateDummyBody(f.fields);
+        } else if (f.type === 'array') {
+          obj[f.name] = [];
+        } else if (f.type === 'int' || f.type === 'number') {
+          obj[f.name] = 0;
+        } else if (f.type === 'bool') {
+          obj[f.name] = false;
+        } else {
+          obj[f.name] = f.type;
+        }
+      });
+      return obj;
+    }
+
+    function addReqHeaderRow(key = '', val = '') {
+      const div = document.createElement('div');
+      div.className = 'req-row';
+      div.innerHTML = `
+            <input placeholder="Header" value="${key}" class="req-header-key">
+            <input placeholder="Value" value="${val}" class="req-header-val">
+            <button class="btn-icon" onclick="this.parentElement.remove()">✕</button>
+        `;
+      document.getElementById('reqHeadersList').appendChild(div);
+    }
+
+    function switchTab(el, id) {
+      document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+      document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+      el.classList.add('active');
+      document.getElementById(id).classList.add('active');
+    }
+
+    function substituteVars(str) {
+      return str.replace(/\{\{([^}]+)\}\}/g, (match, key) => envs[key] || match);
+    }
+
+    async function sendRequest() {
+      const method = document.getElementById('reqMethod').value;
+      let url = document.getElementById('reqUrl').value;
+
+      // Process Params (Query/Path)
+      const queryParams = new URLSearchParams();
+      document.querySelectorAll('.req-param-input').forEach(input => {
+        const val = substituteVars(input.value);
+        if (!val) return;
+
+        const type = input.dataset.in;
+        const name = input.dataset.name;
+
+        if (type === 'path') {
+          url = url.replace(`{${name}}`, val);
+        } else if (type === 'query') {
+          queryParams.append(name, val);
+        }
+      });
+
+      url = substituteVars(url);
+      if (queryParams.toString()) {
+        url += (url.includes('?') ? '&' : '?') + queryParams.toString();
+      }
+
+      // Headers
+      const headers = {};
+      document.querySelectorAll('#reqHeadersList .req-row').forEach(row => {
+        const k = row.querySelector('.req-header-key').value.trim();
+        const v = substituteVars(row.querySelector('.req-header-val').value.trim());
+        if (k) headers[k] = v;
+      });
+
+      // Body
+      let body = null;
+      if (['POST', 'PUT', 'PATCH'].includes(method)) {
+        const rawBody = document.getElementById('reqBodyEditor').value;
+        body = substituteVars(rawBody);
+      }
+
+      const statusEl = document.getElementById('reqResponseStatus');
+      const bodyEl = document.getElementById('reqResponseBody');
+
+      statusEl.innerText = 'Sending...';
+      bodyEl.innerText = '';
+
+      const startTime = Date.now();
+      try {
+        const res = await fetch(url, {method, headers, body});
+        const duration = Date.now() - startTime;
+
+        statusEl.innerHTML = `<span style="font-weight:bold; color:${res.ok ? 'green' : 'red'}">${res.status} ${res.statusText}</span> - ${duration}ms`;
+
+        const contentType = res.headers.get('content-type');
+        if (contentType && contentType.includes('application/json')) {
+          const json = await res.json();
+          bodyEl.innerText = JSON.stringify(json, null, 2);
+        } else {
+          bodyEl.innerText = await res.text();
+        }
+      } catch (e) {
+        statusEl.innerText = 'Error';
+        bodyEl.innerText = e.message;
+      }
+    }
+
+    function closeModal(id) {
+      document.getElementById(id).classList.remove('active');
+    }
+
+    // Close modals on click outside
+    window.onclick = function (event) {
+      if (event.target.classList.contains('modal-overlay')) {
+        event.target.classList.remove('active');
+      }
+    }
+
+    // Start
+    init();
+
+  </script>
+</body>
+
+</html>
