@@ -221,6 +221,108 @@ func (fs *Flags) AutoRegister(config any) {
 	fs.autoRegisterWithPrefix(config, "", "")
 }
 
+func (fs *Flags) registerValue(field reflect.Value, flagName, defaultValue, usage string) {
+	// 根据字段类型注册不同的参数类型
+	switch {
+	case field.Type() == reflect.TypeOf(time.Duration(0)):
+		// 处理 time.Duration 类型
+		defaultDuration := time.Duration(0)
+		if defaultValue != "" {
+			if parsed, err := time.ParseDuration(defaultValue); err == nil {
+				defaultDuration = parsed
+			}
+		}
+		durationPtr := (*DurationValue)(field.Addr().Interface().(*time.Duration))
+		fs.Var(durationPtr, flagName, usage)
+		// 设置默认值
+		*durationPtr = DurationValue(defaultDuration)
+
+	case field.Type() == reflect.TypeOf(time.Time{}):
+		// 处理 time.Time 类型
+		defaultTime := time.Time{}
+		if defaultValue != "" {
+			if parsed, err := time.Parse(time.RFC3339, defaultValue); err == nil {
+				defaultTime = parsed
+			}
+		}
+		timePtr := (*TimeValue)(field.Addr().Interface().(*time.Time))
+		fs.Var(timePtr, flagName, usage)
+		// 设置默认值
+		*timePtr = TimeValue(defaultTime)
+
+	case field.Kind() == reflect.Slice || field.Kind() == reflect.Array:
+		// 处理 slice 和 array 类型，从文件加载
+		fileValue := NewFileValue(field)
+		usage += " (file path to JSON array)"
+		fs.Var(fileValue, flagName, usage)
+
+		// 如果有默认值，尝试从文件加载或解析JSON
+		if defaultValue != "" {
+			if err := loadDefaultComplexValue(field, defaultValue); err != nil {
+				fmt.Printf("Warning: failed to load default value for %s: %v\n", flagName, err)
+			}
+		}
+
+	case field.Kind() == reflect.Map:
+		// 处理 map 类型，从文件加载
+		fileValue := NewFileValue(field)
+		usage += " (file path to JSON object)"
+		fs.Var(fileValue, flagName, usage)
+
+		// 如果有默认值，尝试从文件加载或解析JSON
+		if defaultValue != "" {
+			if err := loadDefaultComplexValue(field, defaultValue); err != nil {
+				fmt.Printf("Warning: failed to load default value for %s: %v\n", flagName, err)
+			}
+		}
+
+	case field.Kind() == reflect.String:
+		fs.StringVar(field.Addr().Interface().(*string), flagName, defaultValue, usage)
+
+	case field.Kind() == reflect.Int:
+		defaultInt, err := strconv.Atoi(defaultValue)
+		if err != nil {
+			defaultInt = 0
+		}
+		fs.IntVar(field.Addr().Interface().(*int), flagName, defaultInt, usage)
+
+	case field.Kind() == reflect.Int64:
+		defaultInt64, err := strconv.ParseInt(defaultValue, 10, 64)
+		if err != nil {
+			defaultInt64 = 0
+		}
+		fs.Int64Var(field.Addr().Interface().(*int64), flagName, defaultInt64, usage)
+
+	case field.Kind() == reflect.Bool:
+		defaultBool := strings.ToLower(defaultValue) == "true"
+		fs.BoolVar(field.Addr().Interface().(*bool), flagName, defaultBool, usage)
+
+	case field.Kind() == reflect.Float64:
+		defaultFloat, err := strconv.ParseFloat(defaultValue, 64)
+		if err != nil {
+			defaultFloat = 0
+		}
+		fs.Float64Var(field.Addr().Interface().(*float64), flagName, defaultFloat, usage)
+
+	case field.Kind() == reflect.Uint:
+		defaultUint, err := strconv.ParseUint(defaultValue, 10, 0)
+		if err != nil {
+			defaultUint = 0
+		}
+		fs.UintVar(field.Addr().Interface().(*uint), flagName, uint(defaultUint), usage)
+
+	case field.Kind() == reflect.Uint64:
+		defaultUint64, err := strconv.ParseUint(defaultValue, 10, 64)
+		if err != nil {
+			defaultUint64 = 0
+		}
+		fs.Uint64Var(field.Addr().Interface().(*uint64), flagName, defaultUint64, usage)
+
+	default:
+		fmt.Printf("Warning: unsupported field type: %s (%s) for field %s\n", field.Kind(), field.Type(), flagName)
+	}
+}
+
 // autoRegisterWithPrefix 递归注册命令行参数，支持嵌套结构体和 embedding
 func (fs *Flags) autoRegisterWithPrefix(config any, envPrefix, flagPrefix string) {
 	v := reflect.ValueOf(config)
@@ -301,103 +403,12 @@ func (fs *Flags) autoRegisterWithPrefix(config any, envPrefix, flagPrefix string
 		usage := getFieldDescription(fieldType, flagName, envKey)
 
 		// 根据字段类型注册不同的参数类型
-		switch {
-		case field.Type() == reflect.TypeOf(time.Duration(0)):
-			// 处理 time.Duration 类型
-			defaultDuration := time.Duration(0)
-			if defaultValue != "" {
-				if parsed, err := time.ParseDuration(defaultValue); err == nil {
-					defaultDuration = parsed
-				}
-			}
-			durationPtr := (*DurationValue)(field.Addr().Interface().(*time.Duration))
-			fs.Var(durationPtr, flagName, usage)
-			// 设置默认值
-			*durationPtr = DurationValue(defaultDuration)
+		fs.registerValue(field, flagName, defaultValue, usage)
 
-		case field.Type() == reflect.TypeOf(time.Time{}):
-			// 处理 time.Time 类型
-			defaultTime := time.Time{}
-			if defaultValue != "" {
-				if parsed, err := time.Parse(time.RFC3339, defaultValue); err == nil {
-					defaultTime = parsed
-				}
-			}
-			timePtr := (*TimeValue)(field.Addr().Interface().(*time.Time))
-			fs.Var(timePtr, flagName, usage)
-			// 设置默认值
-			*timePtr = TimeValue(defaultTime)
-
-		case field.Kind() == reflect.Slice || field.Kind() == reflect.Array:
-			// 处理 slice 和 array 类型，从文件加载
-			fileValue := NewFileValue(field)
-			usage += " (file path to JSON array)"
-			fs.Var(fileValue, flagName, usage)
-
-			// 如果有默认值，尝试从文件加载或解析JSON
-			if defaultValue != "" {
-				if err := loadDefaultComplexValue(field, defaultValue); err != nil {
-					fmt.Printf("Warning: failed to load default value for %s: %v\n", flagName, err)
-				}
-			}
-
-		case field.Kind() == reflect.Map:
-			// 处理 map 类型，从文件加载
-			fileValue := NewFileValue(field)
-			usage += " (file path to JSON object)"
-			fs.Var(fileValue, flagName, usage)
-
-			// 如果有默认值，尝试从文件加载或解析JSON
-			if defaultValue != "" {
-				if err := loadDefaultComplexValue(field, defaultValue); err != nil {
-					fmt.Printf("Warning: failed to load default value for %s: %v\n", flagName, err)
-				}
-			}
-
-		case field.Kind() == reflect.String:
-			fs.StringVar(field.Addr().Interface().(*string), flagName, defaultValue, usage)
-
-		case field.Kind() == reflect.Int:
-			defaultInt, err := strconv.Atoi(defaultValue)
-			if err != nil {
-				defaultInt = 0
-			}
-			fs.IntVar(field.Addr().Interface().(*int), flagName, defaultInt, usage)
-
-		case field.Kind() == reflect.Int64:
-			defaultInt64, err := strconv.ParseInt(defaultValue, 10, 64)
-			if err != nil {
-				defaultInt64 = 0
-			}
-			fs.Int64Var(field.Addr().Interface().(*int64), flagName, defaultInt64, usage)
-
-		case field.Kind() == reflect.Bool:
-			defaultBool := strings.ToLower(defaultValue) == "true"
-			fs.BoolVar(field.Addr().Interface().(*bool), flagName, defaultBool, usage)
-
-		case field.Kind() == reflect.Float64:
-			defaultFloat, err := strconv.ParseFloat(defaultValue, 64)
-			if err != nil {
-				defaultFloat = 0
-			}
-			fs.Float64Var(field.Addr().Interface().(*float64), flagName, defaultFloat, usage)
-
-		case field.Kind() == reflect.Uint:
-			defaultUint, err := strconv.ParseUint(defaultValue, 10, 0)
-			if err != nil {
-				defaultUint = 0
-			}
-			fs.UintVar(field.Addr().Interface().(*uint), flagName, uint(defaultUint), usage)
-
-		case field.Kind() == reflect.Uint64:
-			defaultUint64, err := strconv.ParseUint(defaultValue, 10, 64)
-			if err != nil {
-				defaultUint64 = 0
-			}
-			fs.Uint64Var(field.Addr().Interface().(*uint64), flagName, defaultUint64, usage)
-
-		default:
-			fmt.Printf("Warning: unsupported field type: %s (%s) for field %s\n", field.Kind(), field.Type(), flagName)
+		// 注册短标签参数
+		if shortTag := fieldType.Tag.Get("short"); shortTag != "" {
+			shortUsage := getFieldDescription(fieldType, shortTag, envKey)
+			fs.registerValue(field, shortTag, defaultValue, shortUsage)
 		}
 	}
 }
