@@ -126,11 +126,9 @@ type RouteHandler struct {
 	ArgsDesc     string
 }
 
+// String() => /router/path
 func (r *route) String() string {
 	if r.parent != nil {
-		if r.parent.String() == "" {
-			return r.fragment
-		}
 		return r.parent.String() + "/" + r.fragment
 	}
 	return r.fragment
@@ -268,6 +266,16 @@ func (r *route) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 
 	if subR, fcs, infos := r.match(path, 0, req.Method, x); subR != nil && len(fcs) > 0 {
+		skipIdx := -1
+		for i := range fcs {
+			if _, ok := fcs[i].(FuncSkipBefore); ok {
+				skipIdx = i
+			}
+		}
+		if skipIdx >= 0 {
+			fcs = fcs[skipIdx+1:]
+			infos = infos[skipIdx+1:]
+		}
 		x.fcs = fcs
 		x.fcsInfo = infos
 		x.Next()
@@ -761,17 +769,6 @@ func (r *route) syncCache() {
 
 		r.handlersInfoCache[k] = append(append([]*HandlerInfo{}, beforeInfo...), mh.HandlersInfo...)
 		r.handlersInfoCache[k] = append(r.handlersInfoCache[k], afterInfo...)
-
-		skipIdx := -1
-		for i := range r.handlersCache[k] {
-			if _, ok := r.handlersCache[k][i].(FuncSkipBefore); ok {
-				skipIdx = i
-			}
-		}
-		if skipIdx >= 0 {
-			r.handlersCache[k] = append([]any{}, r.handlersCache[k][skipIdx+1:]...)
-			r.handlersInfoCache[k] = append([]*HandlerInfo{}, r.handlersInfoCache[k][skipIdx+1:]...)
-		}
 	}
 
 	for _, sub := range r.children {
