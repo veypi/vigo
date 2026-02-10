@@ -231,9 +231,8 @@ func (fs *Flags) registerValue(field reflect.Value, flagName, defaultValue, usag
 			}
 		}
 		durationPtr := (*DurationValue)(field.Addr().Interface().(*time.Duration))
-		fs.Var(durationPtr, flagName, usage)
-		// 设置默认值
 		*durationPtr = DurationValue(defaultDuration)
+		fs.Var(durationPtr, flagName, usage)
 
 	case field.Type() == reflect.TypeOf(time.Time{}):
 		// 处理 time.Time 类型
@@ -244,15 +243,13 @@ func (fs *Flags) registerValue(field reflect.Value, flagName, defaultValue, usag
 			}
 		}
 		timePtr := (*TimeValue)(field.Addr().Interface().(*time.Time))
-		fs.Var(timePtr, flagName, usage)
-		// 设置默认值
 		*timePtr = TimeValue(defaultTime)
+		fs.Var(timePtr, flagName, usage)
 
 	case field.Kind() == reflect.Slice || field.Kind() == reflect.Array:
 		// 处理 slice 和 array 类型，从文件加载
 		fileValue := NewFileValue(field)
 		usage += " (file path to JSON array)"
-		fs.Var(fileValue, flagName, usage)
 
 		// 如果有默认值，尝试从文件加载或解析JSON
 		if defaultValue != "" {
@@ -260,12 +257,12 @@ func (fs *Flags) registerValue(field reflect.Value, flagName, defaultValue, usag
 				fmt.Printf("Warning: failed to load default value for %s: %v\n", flagName, err)
 			}
 		}
+		fs.Var(fileValue, flagName, usage)
 
 	case field.Kind() == reflect.Map:
 		// 处理 map 类型，从文件加载
 		fileValue := NewFileValue(field)
 		usage += " (file path to JSON object)"
-		fs.Var(fileValue, flagName, usage)
 
 		// 如果有默认值，尝试从文件加载或解析JSON
 		if defaultValue != "" {
@@ -273,51 +270,129 @@ func (fs *Flags) registerValue(field reflect.Value, flagName, defaultValue, usag
 				fmt.Printf("Warning: failed to load default value for %s: %v\n", flagName, err)
 			}
 		}
+		fs.Var(fileValue, flagName, usage)
 
 	case field.Kind() == reflect.String:
-		fs.StringVar(field.Addr().Interface().(*string), flagName, defaultValue, usage)
+		if v, ok := field.Addr().Interface().(*string); ok {
+			fs.StringVar(v, flagName, defaultValue, usage)
+		} else {
+
+			val := &genericValue{field: field}
+			if defaultValue != "" {
+				val.Set(defaultValue)
+				usage += fmt.Sprintf(" (default: %s)", defaultValue)
+			}
+			fs.Var(val, flagName, usage)
+		}
 
 	case field.Kind() == reflect.Int:
-		defaultInt, err := strconv.Atoi(defaultValue)
-		if err != nil {
-			defaultInt = 0
+		if v, ok := field.Addr().Interface().(*int); ok {
+			defaultInt, err := strconv.Atoi(defaultValue)
+			if err != nil {
+				defaultInt = 0
+			}
+			fs.IntVar(v, flagName, defaultInt, usage)
+		} else {
+			val := &genericValue{field: field}
+			if defaultValue != "" {
+				val.Set(defaultValue)
+				usage += fmt.Sprintf(" (default: %s)", defaultValue)
+			}
+			fs.Var(val, flagName, usage)
 		}
-		fs.IntVar(field.Addr().Interface().(*int), flagName, defaultInt, usage)
 
 	case field.Kind() == reflect.Int64:
-		defaultInt64, err := strconv.ParseInt(defaultValue, 10, 64)
-		if err != nil {
-			defaultInt64 = 0
+		if v, ok := field.Addr().Interface().(*int64); ok {
+			defaultInt64, err := strconv.ParseInt(defaultValue, 10, 64)
+			if err != nil {
+				defaultInt64 = 0
+			}
+			fs.Int64Var(v, flagName, defaultInt64, usage)
+		} else {
+			val := &genericValue{field: field}
+			if defaultValue != "" {
+				val.Set(defaultValue)
+				usage += fmt.Sprintf(" (default: %s)", defaultValue)
+			}
+			fs.Var(val, flagName, usage)
 		}
-		fs.Int64Var(field.Addr().Interface().(*int64), flagName, defaultInt64, usage)
 
 	case field.Kind() == reflect.Bool:
-		defaultBool := strings.ToLower(defaultValue) == "true"
-		fs.BoolVar(field.Addr().Interface().(*bool), flagName, defaultBool, usage)
+		if v, ok := field.Addr().Interface().(*bool); ok {
+			defaultBool := strings.ToLower(defaultValue) == "true"
+			fs.BoolVar(v, flagName, defaultBool, usage)
+		} else {
+			val := &genericValue{field: field}
+			if defaultValue != "" {
+				val.Set(defaultValue)
+				usage += fmt.Sprintf(" (default: %s)", defaultValue)
+			}
+			fs.Var(val, flagName, usage)
+		}
 
 	case field.Kind() == reflect.Float64:
-		defaultFloat, err := strconv.ParseFloat(defaultValue, 64)
-		if err != nil {
-			defaultFloat = 0
+		if v, ok := field.Addr().Interface().(*float64); ok {
+			defaultFloat, err := strconv.ParseFloat(defaultValue, 64)
+			if err != nil {
+				defaultFloat = 0
+			}
+			fs.Float64Var(v, flagName, defaultFloat, usage)
+		} else {
+			val := &genericValue{field: field}
+			if defaultValue != "" {
+				val.Set(defaultValue)
+				usage += fmt.Sprintf(" (default: %s)", defaultValue)
+			}
+			fs.Var(val, flagName, usage)
 		}
-		fs.Float64Var(field.Addr().Interface().(*float64), flagName, defaultFloat, usage)
 
 	case field.Kind() == reflect.Uint:
-		defaultUint, err := strconv.ParseUint(defaultValue, 10, 0)
-		if err != nil {
-			defaultUint = 0
+		if v, ok := field.Addr().Interface().(*uint); ok {
+			defaultUint, err := strconv.ParseUint(defaultValue, 10, 0)
+			if err != nil {
+				defaultUint = 0
+			}
+			fs.UintVar(v, flagName, uint(defaultUint), usage)
+		} else {
+			val := &genericValue{field: field}
+			if defaultValue != "" {
+				val.Set(defaultValue)
+				usage += fmt.Sprintf(" (default: %s)", defaultValue)
+			}
+			fs.Var(val, flagName, usage)
 		}
-		fs.UintVar(field.Addr().Interface().(*uint), flagName, uint(defaultUint), usage)
 
 	case field.Kind() == reflect.Uint64:
-		defaultUint64, err := strconv.ParseUint(defaultValue, 10, 64)
-		if err != nil {
-			defaultUint64 = 0
+		if v, ok := field.Addr().Interface().(*uint64); ok {
+			defaultUint64, err := strconv.ParseUint(defaultValue, 10, 64)
+			if err != nil {
+				defaultUint64 = 0
+			}
+			fs.Uint64Var(v, flagName, defaultUint64, usage)
+		} else {
+			val := &genericValue{field: field}
+			if defaultValue != "" {
+				val.Set(defaultValue)
+				usage += fmt.Sprintf(" (default: %s)", defaultValue)
+			}
+			fs.Var(val, flagName, usage)
 		}
-		fs.Uint64Var(field.Addr().Interface().(*uint64), flagName, defaultUint64, usage)
 
 	default:
-		fmt.Printf("Warning: unsupported field type: %s (%s) for field %s\n", field.Kind(), field.Type(), flagName)
+		// 尝试使用 genericValue 处理其他类型（如 Int32, Float32 等）
+		val := &genericValue{field: field}
+		// 检查类型是否支持
+		if val.isSupported() {
+			if defaultValue != "" {
+				if err := val.Set(defaultValue); err != nil {
+					fmt.Printf("Warning: failed to set default value for %s: %v\n", flagName, err)
+				}
+				usage += fmt.Sprintf(" (default: %s)", defaultValue)
+			}
+			fs.Var(val, flagName, usage)
+		} else {
+			fmt.Printf("Warning: unsupported field type: %s (%s) for field %s\n", field.Kind(), field.Type(), flagName)
+		}
 	}
 }
 
@@ -434,4 +509,68 @@ func loadDefaultComplexValue(field reflect.Value, defaultValue string) error {
 	}
 	field.Set(reflect.ValueOf(newValue).Elem())
 	return nil
+}
+
+// genericValue 通用反射值包装器，用于支持自定义类型的 flag 绑定
+type genericValue struct {
+	field reflect.Value
+}
+
+func (v *genericValue) String() string {
+	if !v.field.IsValid() {
+		return ""
+	}
+	if v.field.Kind() == reflect.String {
+		return v.field.String()
+	}
+	return fmt.Sprintf("%v", v.field.Interface())
+}
+
+func (v *genericValue) Set(s string) error {
+	switch v.field.Kind() {
+	case reflect.String:
+		v.field.SetString(s)
+	case reflect.Bool:
+		b, err := strconv.ParseBool(s)
+		if err != nil {
+			return err
+		}
+		v.field.SetBool(b)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		i, err := strconv.ParseInt(s, 0, 64)
+		if err != nil {
+			return err
+		}
+		v.field.SetInt(i)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		u, err := strconv.ParseUint(s, 0, 64)
+		if err != nil {
+			return err
+		}
+		v.field.SetUint(u)
+	case reflect.Float32, reflect.Float64:
+		f, err := strconv.ParseFloat(s, 64)
+		if err != nil {
+			return err
+		}
+		v.field.SetFloat(f)
+	default:
+		return fmt.Errorf("unsupported kind %s", v.field.Kind())
+	}
+	return nil
+}
+
+func (v *genericValue) IsBoolFlag() bool {
+	return v.field.Kind() == reflect.Bool
+}
+
+func (v *genericValue) isSupported() bool {
+	switch v.field.Kind() {
+	case reflect.String, reflect.Bool,
+		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
+		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
+		reflect.Float32, reflect.Float64:
+		return true
+	}
+	return false
 }
