@@ -34,6 +34,8 @@ func NewRouter() Router {
 		methods:           make(map[string]*RouteHandler),
 		children:          make([]*route, 0),
 		handlersInfoCache: make(map[string][]*HandlerInfo),
+		vars:              make(map[string]any),
+		varsCache:         make(map[string]any),
 	}
 	return r
 }
@@ -48,6 +50,7 @@ type Router interface {
 	Doc() *Doc
 
 	Clear(url string, method string)
+	SetVar(key string, value any) Router
 	Set(url string, method string, handlers ...any) Router
 	Get(url string, handlers ...any) Router
 	Any(url string, handlers ...any) Router
@@ -94,6 +97,9 @@ type route struct {
 	funcAfterInfo     []*HandlerInfo
 	handlersCache     map[string][]any
 	handlersInfoCache map[string][]*HandlerInfo
+
+	vars      map[string]any
+	varsCache map[string]any
 
 	methods map[string]*RouteHandler
 
@@ -278,6 +284,7 @@ func (r *route) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 		}
 		x.fcs = fcs
 		x.fcsInfo = infos
+		x.routeVars = subR.varsCache
 		x.Next()
 	} else {
 		x.WriteHeader(404)
@@ -482,6 +489,15 @@ func getHandlerLocation() (string, int) {
 		}
 	}
 	return "", 0
+}
+
+func (r *route) SetVar(key string, value any) Router {
+	if r.vars == nil {
+		r.vars = make(map[string]any)
+	}
+	r.vars[key] = value
+	r.syncCache()
+	return r
 }
 
 // Set registers handlers for a specific route path and method.
@@ -751,6 +767,19 @@ func (r *route) Use(middleware ...any) Router {
 func (r *route) syncCache() {
 	r.handlersCache = make(map[string][]any)
 	r.handlersInfoCache = make(map[string][]*HandlerInfo)
+	r.varsCache = make(map[string]any)
+
+	if r.parent != nil && r.parent.varsCache != nil {
+		for k, v := range r.parent.varsCache {
+			r.varsCache[k] = v
+		}
+	}
+	if r.vars != nil {
+		for k, v := range r.vars {
+			r.varsCache[k] = v
+		}
+	}
+
 	before := make([]any, 0, 10)
 	beforeInfo := make([]*HandlerInfo, 0, 10)
 	after := make([]any, 0, 10)
@@ -792,6 +821,17 @@ func (r *route) Replace(subr Router) Router {
 	sub.paramName = r.paramName
 	sub.regex = r.regex
 	sub.paramKeys = r.paramKeys
+
+	if r.vars != nil {
+		if sub.vars == nil {
+			sub.vars = make(map[string]any)
+		}
+		for k, v := range r.vars {
+			if _, ok := sub.vars[k]; !ok {
+				sub.vars[k] = v
+			}
+		}
+	}
 
 	// Find index
 	idx := -1

@@ -47,6 +47,7 @@ type X struct {
 	writer     http.ResponseWriter
 	Request    *http.Request
 	PathParams PathParams
+	routeVars  map[string]any
 	fcs        []any
 	fcsInfo    []*HandlerInfo
 	fid        int
@@ -125,7 +126,14 @@ func (x *X) ResponseWriter() http.ResponseWriter {
 }
 
 func (x *X) Get(key string) any {
-	return x.Request.Context().Value(key)
+	v := x.Request.Context().Value(key)
+	if v != nil {
+		return v
+	}
+	if x.routeVars != nil {
+		return x.routeVars[key]
+	}
+	return nil
 }
 
 func (x *X) Set(key string, value any) {
@@ -193,6 +201,7 @@ func release(x *X) {
 	x.PathParams = x.PathParams[:0]
 	x.Request = nil
 	x.writer = nil
+	x.routeVars = nil
 	x.fcs = nil
 	x.PipeValue = nil
 	xPool.Put(x)
