@@ -6,16 +6,19 @@ import (
 	"fmt"
 	"io"
 	"reflect"
+	"strings"
 
 	"github.com/veypi/vigo"
+	"github.com/veypi/vigo/logv"
 	"github.com/veypi/vigo/utils"
 	"gorm.io/gorm"
+	"gorm.io/gorm/schema"
 )
 
 // Register registers CRUD routes for a model.
 // model: A pointer to the model struct (e.g. &User{}).
 // The database instance must be injected into the context with key "db".
-func Register[T any](r vigo.Router, model T) {
+func New[T any](model T) *Controller[T] {
 	// Get struct name via reflection
 	t := reflect.TypeOf(model)
 	if t.Kind() == reflect.Ptr {
@@ -28,27 +31,76 @@ func Register[T any](r vigo.Router, model T) {
 	structName := t.Name()
 	idParam := utils.CamelToSnake(structName) + "_id"
 
-	c := &controller[T]{
-		idParam: idParam,
+	var listQueryFields []string
+	namingStrategy := schema.NamingStrategy{}
+
+	for i := 0; i < t.NumField(); i++ {
+		field := t.Field(i)
+		if strings.Contains(strings.ToLower(field.Name), "name") {
+			// Use GORM's naming strategy to get the column name
+			dbName := namingStrategy.ColumnName("", field.Name)
+			listQueryFields = append(listQueryFields, dbName)
+		}
 	}
 
-	// GET / - List
-	r.Get("/", "List resources", c.List)
-	// POST / - Create
-	r.Post("/", "Create resource", c.Create)
-	// GET /{id} - Get one
-	r.Get(fmt.Sprintf("/{%s}", idParam), "Get resource", c.Get)
-	// DELETE /{id} - Delete one
-	r.Delete(fmt.Sprintf("/{%s}", idParam), "Delete resource", c.Delete)
-	// PATCH /{id} - Update one (partial)
-	r.Patch(fmt.Sprintf("/{%s}", idParam), "Update resource", c.Update)
+	return &Controller[T]{
+		name:            structName,
+		idParam:         idParam,
+		listQueryFields: listQueryFields,
+	}
 }
 
-type controller[T any] struct {
-	idParam string
+type Controller[T any] struct {
+	name            string
+	idParam         string
+	listQueryFields []string
 }
 
-func (c *controller[T]) getDB(x *vigo.X) (*gorm.DB, error) {
+// SetIDParam sets the URL parameter name for the ID (default is {struct_name}_id)
+func (c *Controller[T]) SetIDParam(name string) *Controller[T] {
+	c.idParam = name
+	return c
+}
+
+// SetListQueryFields sets the database fields to search against when the 'query' parameter is provided in ListReq
+func (c *Controller[T]) SetListQueryFields(fields ...string) *Controller[T] {
+	c.listQueryFields = fields
+	return c
+}
+
+// Register registers CRUD routes.
+// actions: Optional list of actions to register ("list", "create", "get", "update", "delete").
+// If no actions are provided, all routes are registered.
+func (c *Controller[T]) Register(r vigo.Router, actions ...string) *Controller[T] {
+	if len(actions) == 0 {
+		actions = []string{"list", "create", "get", "update", "delete"}
+	}
+
+	for _, action := range actions {
+		switch action {
+		case "list":
+			// GET / - List
+			r.Get("/", "List "+c.name, c.list)
+		case "create":
+			// POST / - Create
+			r.Post("/", "Create "+c.name, c.create)
+		case "get":
+			// GET /{id} - Get one
+			r.Get(fmt.Sprintf("/{%s}", c.idParam), "Get "+c.name, c.get)
+		case "update":
+			// PATCH /{id} - Update one (partial)
+			r.Patch(fmt.Sprintf("/{%s}", c.idParam), "Update "+c.name, c.update)
+		case "delete":
+			// DELETE /{id} - Delete one
+			r.Delete(fmt.Sprintf("/{%s}", c.idParam), "Delete "+c.name, c.delete)
+		default:
+			logv.Warn().Msgf("crud: unknown action %s", action)
+		}
+	}
+	return c
+}
+
+func (c *Controller[T]) getDB(x *vigo.X) (*gorm.DB, error) {
 	db, ok := x.Get("db").(func() *gorm.DB)
 	if !ok {
 		return nil, vigo.ErrInternalServer.WithMessage("invalid database instance in context")
@@ -57,8 +109,10 @@ func (c *controller[T]) getDB(x *vigo.X) (*gorm.DB, error) {
 }
 
 type ListReq struct {
-	Page int `src:"query" default:"1" json:"page"`
-	Size int `src:"query" default:"20" json:"size"`
+	Page  int    `src:"query" default:"1" json:"page"`
+	Size  int    `src:"query" default:"20" json:"size"`
+	Sort  string `src:"query" json:"sort"`
+	Query string `src:"query" json:"query"`
 }
 
 type ListResponse[T any] struct {
@@ -68,7 +122,7 @@ type ListResponse[T any] struct {
 	Size  int   `json:"size"`
 }
 
-func (c *controller[T]) List(x *vigo.X, req *ListReq) (*ListResponse[T], error) {
+func (c *Controller[T]) list(x *vigo.X, req *ListReq) (*ListResponse[T], error) {
 	db, err := c.getDB(x)
 	if err != nil {
 		return nil, err
@@ -80,6 +134,24 @@ func (c *controller[T]) List(x *vigo.X, req *ListReq) (*ListResponse[T], error) 
 
 	model := new(T)
 	tx := db.Model(model)
+
+	if req.Sort != "" {
+		tx = tx.Order(req.Sort)
+	}
+
+	if req.Query != "" && len(c.listQueryFields) > 0 {
+		var queryTx *gorm.DB
+		for i, field := range c.listQueryFields {
+			cond := fmt.Sprintf("%s LIKE ?", field)
+			val := "%" + req.Query + "%"
+			if i == 0 {
+				queryTx = db.Where(cond, val)
+			} else {
+				queryTx = queryTx.Or(cond, val)
+			}
+		}
+		tx = tx.Where(queryTx)
+	}
 
 	if err := tx.Count(&total).Error; err != nil {
 		return nil, vigo.ErrInternalServer.WithError(err)
@@ -97,7 +169,7 @@ func (c *controller[T]) List(x *vigo.X, req *ListReq) (*ListResponse[T], error) 
 	}, nil
 }
 
-func (c *controller[T]) Get(x *vigo.X) (*T, error) {
+func (c *Controller[T]) get(x *vigo.X) (*T, error) {
 	db, err := c.getDB(x)
 	if err != nil {
 		return nil, err
@@ -118,7 +190,7 @@ func (c *controller[T]) Get(x *vigo.X) (*T, error) {
 	return &item, nil
 }
 
-func (c *controller[T]) Create(x *vigo.X, req *T) (*T, error) {
+func (c *Controller[T]) create(x *vigo.X, req *T) (*T, error) {
 	db, err := c.getDB(x)
 	if err != nil {
 		return nil, err
@@ -130,7 +202,7 @@ func (c *controller[T]) Create(x *vigo.X, req *T) (*T, error) {
 	return req, nil
 }
 
-func (c *controller[T]) Delete(x *vigo.X) (any, error) {
+func (c *Controller[T]) delete(x *vigo.X) (any, error) {
 	db, err := c.getDB(x)
 	if err != nil {
 		return nil, err
@@ -148,7 +220,7 @@ func (c *controller[T]) Delete(x *vigo.X) (any, error) {
 	return "success", nil
 }
 
-func (c *controller[T]) Update(x *vigo.X) (*T, error) {
+func (c *Controller[T]) update(x *vigo.X) (*T, error) {
 	db, err := c.getDB(x)
 	if err != nil {
 		return nil, err
