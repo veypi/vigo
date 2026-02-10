@@ -42,8 +42,6 @@ func DiliverData(x *X, data any) (any, error) {
 	return data, nil
 }
 
-var xType = reflect.TypeOf((*X)(nil))
-
 type eface struct {
 	_type unsafe.Pointer
 	data  unsafe.Pointer

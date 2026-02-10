@@ -26,14 +26,20 @@ func New(name string, des string, cliOpts any) *Flags {
 	}
 	if cliOpts != nil {
 		configFile := f.String("f", "./dev.yaml", "the config file")
+		loggerLevel := f.String("l", "debug", "logger_level")
+		loggerPath := f.String("logger_path", "", "logger_path")
 		f.AutoRegister(cliOpts)
-		cmdCfg := f.SubCommand("gencfg", "generate cfg file")
+		cmdCfg := f.SubCommand("gen_cfg", "generate cfg file")
 		cmdCfg.Command = func() error {
 			return DumpCfg(*configFile, cliOpts)
 		}
 		f.Before = func() error {
 			LoadCfg(*configFile, cliOpts)
 			f.Parse()
+			logv.SetLevel(logv.AssertFuncErr(logv.ParseLevel(*loggerLevel)))
+			if loggerPath != nil && *loggerPath != "" {
+				logv.SetLogger(logv.FileLogger(*loggerPath))
+			}
 			return nil
 		}
 	}

@@ -8,6 +8,7 @@
 package flags
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"reflect"
@@ -15,7 +16,6 @@ import (
 	"strings"
 	"time"
 
-	"encoding/json"
 	"github.com/joho/godotenv"
 	"github.com/veypi/vigo/logv"
 )
@@ -110,9 +110,7 @@ func getDefaultValue(field reflect.Value, envKey, defaultTag string) string {
 
 // getFieldDescription 获取字段的描述信息
 func getFieldDescription(fieldType reflect.StructField, flagName, envKey string) string {
-
-	// 其次使用 usage 标签
-	if usage := fieldType.Tag.Get("usage"); usage != "" {
+	if usage := fieldType.Tag.Get("desc"); usage != "" {
 		return fmt.Sprintf("%s (env: %s)", usage, envKey)
 	}
 
@@ -406,7 +404,7 @@ func (fs *Flags) autoRegisterWithPrefix(config any, envPrefix, flagPrefix string
 		fs.registerValue(field, flagName, defaultValue, usage)
 
 		// 注册短标签参数
-		if shortTag := fieldType.Tag.Get("short"); shortTag != "" {
+		if shortTag := fieldType.Tag.Get("short"); shortTag != "" && shortTag != "h" {
 			shortUsage := getFieldDescription(fieldType, shortTag, envKey)
 			fs.registerValue(field, shortTag, defaultValue, shortUsage)
 		}

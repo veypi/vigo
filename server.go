@@ -122,7 +122,11 @@ func (app *Application) Run() error {
 	if e != nil {
 		return e
 	}
-	logv.WithNoCaller.Info().Msg("listening " + app.config.Url())
+	host := app.config.Host
+	if host == "0.0.0.0" {
+		host = "localhost"
+	}
+	logv.WithNoCaller.Info().Msgf("start on http://%s:%d ", host, app.config.Port)
 	return app.server.Serve(l)
 }
 
