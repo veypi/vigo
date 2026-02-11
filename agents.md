@@ -393,12 +393,20 @@ ctrl.SetIDParam("user_id").
         if uid := x.Get("user_id"); uid != nil {
              return db.Where("user_id = ?", uid), nil
         }
-        return db, nil
+        return nil, vigo.ErrNotPermitted
     }).
     SetBeforeCreate(func(x *vigo.X, req *User) error {
         // 强制设置创建人
         if uid := x.Get("user_id"); uid != nil {
             req.UserID = uid.(string)
+        }
+        return nil
+    }).
+    SetBeforeUpdate(func(x *vigo.X, data map[string]any) error {
+        // 禁止修改某些字段，或者记录修改人
+        delete(data, "created_at")
+        if uid := x.Get("user_id"); uid != nil {
+            data["updated_by"] = uid
         }
         return nil
     }).

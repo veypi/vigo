@@ -228,6 +228,12 @@ func (c *Controller[T]) create(x *vigo.X, req *T) (*T, error) {
 		return nil, err
 	}
 
+	if c.beforeCreate != nil {
+		if err := c.beforeCreate(x, req); err != nil {
+			return nil, err
+		}
+	}
+
 	if err := db.Create(req).Error; err != nil {
 		return nil, vigo.ErrInternalServer.WithError(err)
 	}
