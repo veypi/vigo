@@ -473,8 +473,8 @@ func TestRouterPriority2(t *testing.T) {
 	n, _ := resp.Body.Read(body)
 	got := string(body[:n])
 
-	if got != "param=specific" {
-		t.Errorf("Expected param=specific (shadowing), got %s", got)
+	if got != "specific" {
+		t.Errorf("Expected specific (static > param), got %s", got)
 	}
 }
 

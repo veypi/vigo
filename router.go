@@ -438,23 +438,30 @@ func (r *route) get_subrouter(path string) *route {
 			}
 			current.children = append(current.children, next)
 
-			// Sort children: * and ** at the end.
+			// Sort children: Static > Regex/Param > Wildcard/CatchAll
 			sort.SliceStable(current.children, func(i, j int) bool {
 				ki := current.children[i].kind
 				kj := current.children[j].kind
-				// Priority: Static > Regex/Param > Wildcard/CatchAll?
-				// User said: "Matched in order, * sorted at end".
-				// So we only move Wildcard/CatchAll to end.
-				isWildI := ki == nodeWildcard || ki == nodeCatchAll
-				isWildJ := kj == nodeWildcard || kj == nodeCatchAll
 
-				if isWildI && !isWildJ {
-					return false
+				getPriority := func(k nodeType) int {
+					switch k {
+					case nodeStatic:
+						return 0
+					case nodeParam, nodeRegex:
+						return 1
+					case nodeWildcard, nodeCatchAll:
+						return 2
+					default:
+						return 3
+					}
 				}
-				if !isWildI && isWildJ {
-					return true
+
+				pi := getPriority(ki)
+				pj := getPriority(kj)
+
+				if pi != pj {
+					return pi < pj
 				}
-				// Otherwise keep original order (stable sort)
 				return i < j
 			})
 		}

@@ -60,21 +60,55 @@ func SnakeToCamel(input string) string {
 }
 
 // CamelToSnake 将驼峰命名法转换为下划线命名法
-// 例如：CamelToSnake("CamelToSnake") => "camel_to_snake"
-// special case: CaseID => case_id
+// 处理连续大写字母的规则：
+// 1. 连续大写字母片段作为一个整体处理
+// 2. 如果前面是小写字母，连续大写视为新单词（如 aABC -> a_abc）
+// 3. 如果后面是小写字母，除最后一个字母外视为一个单词（如 ABCd -> ab_cd）
+// 例如：
+//   CamelToSnake("CamelToSnake") => "camel_to_snake"
+//   CamelToSnake("APIKey") => "api_key"
+//   CamelToSnake("AbcID") => "abc_id"
+//   CamelToSnake("caseID") => "case_id"
+//   CamelToSnake("ABCDef") => "abc_def"
 func CamelToSnake(input string) string {
+	if input == "" {
+		return ""
+	}
+
+	runes := []rune(input)
 	var result []rune
-	input = strings.ReplaceAll(input, "ID", "Id")
-	for i, r := range input {
+
+	for i := 0; i < len(runes); i++ {
+		r := runes[i]
+
 		if unicode.IsUpper(r) {
-			// 在大写字母前面添加下划线，除非它是第一个字母
+			needUnderscore := false
+
 			if i > 0 {
+				prev := runes[i-1]
+				if unicode.IsLower(prev) || unicode.IsDigit(prev) {
+					// 前面是小写或数字，大写是新单词的开始，需要下划线
+					needUnderscore = true
+				} else if unicode.IsUpper(prev) {
+					// 前面也是大写，检查是否是连续大写的最后一个
+					// 且后面跟着小写字母
+					if i < len(runes)-1 && unicode.IsLower(runes[i+1]) {
+						// 当前字母和后面小写组成新单词
+						needUnderscore = true
+					}
+				}
+			}
+
+			if needUnderscore {
 				result = append(result, '_')
 			}
-			// 转换为小写字母
-			r = unicode.ToLower(r)
+
+			result = append(result, unicode.ToLower(r))
+		} else {
+			result = append(result, r)
 		}
-		result = append(result, r)
 	}
+
 	return string(result)
 }
+
