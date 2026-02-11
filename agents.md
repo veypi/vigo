@@ -324,8 +324,9 @@ if err := cfg.DB().Where("id = ?", req.ID).First(&user).Error; err != nil {
 ## common - 通用工具
 
 ```go
-common.JsonResponse(x, data)
-common.JsonErrorResponse(x, err)
+r.After(common.JsonResponse, common.JsonErrorResponse)
+// common.JsonResponse(x, data)
+// common.JsonErrorResponse(x, err)
 ```
 
 ## config - 配置管理
@@ -389,10 +390,17 @@ ctrl.SetIDParam("user_id").
     SetFilter(func(x *vigo.X, db *gorm.DB) (*gorm.DB, error) {
         // 全局过滤，适用于所有接口(Get/List/Create/Update/Delete)
         // 可用于实现数据权限控制，例如只允许操作自己的数据
-        if uid := x.Get("uid"); uid != nil {
+        if uid := x.Get("user_id"); uid != nil {
              return db.Where("user_id = ?", uid), nil
         }
         return db, nil
+    }).
+    SetBeforeCreate(func(x *vigo.X, req *User) error {
+        // 强制设置创建人
+        if uid := x.Get("user_id"); uid != nil {
+            req.UserID = uid.(string)
+        }
+        return nil
     }).
     Register(r)
 
@@ -410,36 +418,4 @@ type ListReq struct {
     Sort  string `src:"query"`
     Query string `src:"query"`  // 模糊搜索
 }
-```
-
-## limiter - 限流
-
-```go
-import "github.com/veypi/vigo/contrib/limiter"
-
-// 创建限流器 (窗口10秒, 最大100请求, 最小间隔100ms)
-l := limiter.NewAdvancedRequestLimiter(
-    10*time.Second,
-    100,
-    100*time.Millisecond,
-)
-
-// 启动清理协程
-l.StartCleaner(5 * time.Minute)
-
-// 作为中间件使用
-r.Use(func(x *vigo.X) (any, error) {
-    return l.Limit(x, nil)
-})
-
-// 自定义 key 生成
-l = limiter.NewAdvancedRequestLimiter(
-    10*time.Second, 100, 100*time.Millisecond,
-    func(x *vigo.X) string {
-        return x.GetRemoteIP()
-    },
-)
-
-// 内置 key 函数
-key := limiter.GetPathKeyFunc(x)  // ip:path
 ```

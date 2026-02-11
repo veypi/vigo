@@ -55,6 +55,8 @@ type Controller[T any] struct {
 	idParam         string
 	listQueryFields []string
 	filter          func(*vigo.X, *gorm.DB) (*gorm.DB, error)
+	beforeCreate    func(*vigo.X, *T) error
+	beforeUpdate    func(*vigo.X, map[string]any) error
 }
 
 // SetIDParam sets the URL parameter name for the ID (default is {struct_name}_id)
@@ -72,6 +74,21 @@ func (c *Controller[T]) SetListQueryFields(fields ...string) *Controller[T] {
 // SetFilter sets a custom filter function for all actions
 func (c *Controller[T]) SetFilter(filter func(*vigo.X, *gorm.DB) (*gorm.DB, error)) *Controller[T] {
 	c.filter = filter
+	return c
+}
+
+// SetBeforeCreate sets a hook that is called before creating a resource.
+// Useful for setting fields like CreatedBy, UserID, etc.
+func (c *Controller[T]) SetBeforeCreate(hook func(*vigo.X, *T) error) *Controller[T] {
+	c.beforeCreate = hook
+	return c
+}
+
+// SetBeforeUpdate sets a hook that is called before updating a resource.
+// The data map contains the fields to be updated.
+// Useful for removing immutable fields or setting UpdatedBy.
+func (c *Controller[T]) SetBeforeUpdate(hook func(*vigo.X, map[string]any) error) *Controller[T] {
+	c.beforeUpdate = hook
 	return c
 }
 
@@ -259,6 +276,12 @@ func (c *Controller[T]) update(x *vigo.X) (*T, error) {
 	delete(data, "ID")
 	// Also remove the param name ID if present
 	delete(data, c.idParam)
+
+	if c.beforeUpdate != nil {
+		if err := c.beforeUpdate(x, data); err != nil {
+			return nil, err
+		}
+	}
 
 	if len(data) > 0 {
 		model := new(T)

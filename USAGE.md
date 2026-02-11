@@ -347,7 +347,16 @@ ctrl.SetFilter(func(x *vigo.X, db *gorm.DB) (*gorm.DB, error) {
          // 如果未登录，返回错误以中断操作
          return nil, vigo.ErrNotAuthorized
     }
+    // 注意：Where 条件对 Create 操作中的数据赋值无效，仅用于 SQL WHERE 子句
     return db.Where("user_id = ?", userID), nil
+}).SetBeforeCreate(func(x *vigo.X, req *User) error {
+    // 在创建前强制设置 UserID
+    req.UserID = x.Get("user_id").(string)
+    return nil
+}).SetBeforeUpdate(func(x *vigo.X, data map[string]any) error {
+    // 防止更新 user_id 字段（虽然 update 逻辑已自动剔除 id，但其他敏感字段需手动处理）
+    delete(data, "user_id")
+    return nil
 })
 
 // 注册路由
