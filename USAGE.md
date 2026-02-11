@@ -319,3 +319,37 @@ models.AutoMigrate(db)
 // 删除表 (交互式确认)
 models.AutoDrop(db)
 ```
+
+## 扩展库 (Contrib)
+
+### CRUD 自动生成
+
+`github.com/veypi/vigo/contrib/crud` 可以快速生成增删改查接口。
+
+```go
+import "github.com/veypi/vigo/contrib/crud"
+
+type Product struct {
+    vigo.Model
+    Name   string `json:"name"`
+    UserID string `json:"user_id"`
+}
+
+// 初始化控制器
+ctrl := crud.New(&Product{})
+
+// 配置权限控制 (SetFilter)
+// 该过滤器会对所有操作 (List, Get, Create, Update, Delete) 生效
+ctrl.SetFilter(func(x *vigo.X, db *gorm.DB) (*gorm.DB, error) {
+    // 示例：仅允许操作当前用户的数据
+    userID := x.Get("user_id")
+    if userID == nil {
+         // 如果未登录，返回错误以中断操作
+         return nil, vigo.ErrNotAuthorized
+    }
+    return db.Where("user_id = ?", userID), nil
+})
+
+// 注册路由
+ctrl.Register(r.SubRouter("/products"))
+```

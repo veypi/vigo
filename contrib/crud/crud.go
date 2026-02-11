@@ -54,6 +54,7 @@ type Controller[T any] struct {
 	name            string
 	idParam         string
 	listQueryFields []string
+	filter          func(*vigo.X, *gorm.DB) (*gorm.DB, error)
 }
 
 // SetIDParam sets the URL parameter name for the ID (default is {struct_name}_id)
@@ -65,6 +66,12 @@ func (c *Controller[T]) SetIDParam(name string) *Controller[T] {
 // SetListQueryFields sets the database fields to search against when the 'query' parameter is provided in ListReq
 func (c *Controller[T]) SetListQueryFields(fields ...string) *Controller[T] {
 	c.listQueryFields = fields
+	return c
+}
+
+// SetFilter sets a custom filter function for all actions
+func (c *Controller[T]) SetFilter(filter func(*vigo.X, *gorm.DB) (*gorm.DB, error)) *Controller[T] {
+	c.filter = filter
 	return c
 }
 
@@ -101,11 +108,19 @@ func (c *Controller[T]) Register(r vigo.Router, actions ...string) *Controller[T
 }
 
 func (c *Controller[T]) getDB(x *vigo.X) (*gorm.DB, error) {
-	db, ok := x.Get("db").(func() *gorm.DB)
+	dbFn, ok := x.Get("db").(func() *gorm.DB)
 	if !ok {
 		return nil, vigo.ErrInternalServer.WithMessage("invalid database instance in context")
 	}
-	return db(), nil
+	db := dbFn()
+	if c.filter != nil {
+		var err error
+		db, err = c.filter(x, db)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return db, nil
 }
 
 type ListReq struct {
