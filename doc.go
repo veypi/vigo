@@ -68,8 +68,10 @@ type DocParam struct {
 }
 
 type DocBody struct {
-	ContentType string      `json:"content_type" yaml:"content_type"` // application/json, multipart/form-data
-	Fields      []*DocField `json:"fields" yaml:"fields"`
+	ContentType string      `json:"content_type" yaml:"content_type"`         // application/json, multipart/form-data
+	Type        string      `json:"type" yaml:"type"`                         // string, int, bool, number, object, array
+	Item        *DocField   `json:"item,omitempty" yaml:"item,omitempty"`     // For arrays
+	Fields      []*DocField `json:"fields,omitempty" yaml:"fields,omitempty"` // For objects
 }
 
 type DocField struct {
@@ -300,6 +302,7 @@ func parseDocArgs(t reflect.Type) ([]*DocParam, *DocBody) {
 		case "json", "form":
 			if body == nil {
 				body = &DocBody{
+					Type:   "object",
 					Fields: make([]*DocField, 0),
 				}
 				if source == "form" {
@@ -322,11 +325,23 @@ func parseDocArgs(t reflect.Type) ([]*DocParam, *DocBody) {
 }
 
 func parseDocResponse(t reflect.Type) *DocBody {
-	// Assume JSON response for now
-	return &DocBody{
-		ContentType: "application/json",
-		Fields:      GenerateDocFields(t),
+	if t.Kind() == reflect.Ptr {
+		t = t.Elem()
 	}
+
+	docType := getDocType(t)
+	body := &DocBody{
+		ContentType: "application/json",
+		Type:        docType,
+	}
+
+	if docType == "array" {
+		body.Item = generateDocField(t.Elem(), "", "")
+	} else if docType == "object" {
+		body.Fields = GenerateDocFields(t)
+	}
+
+	return body
 }
 
 func generateDocField(t reflect.Type, name string, desc string) *DocField {

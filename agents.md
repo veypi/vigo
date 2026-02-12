@@ -171,7 +171,7 @@ type UserUpdateReq struct {
 
 ### 6.2 泛型 Handler (推荐)
 
-框架会自动将 `func(*vigo.X, *Req) (Resp, error)` 转换为标准中间件。
+框架会自动将 `func(*vigo.X, *Req) (Resp, error)` 转换为标准中间件,并根据结构体字段生成输入输出文档。
 
 ```go
 // 业务 Handler
@@ -181,6 +181,16 @@ func CreateUser(x *vigo.X, req *CreateReq) (*User, error) {
         return nil, err
     }
     return newUser, nil
+}
+// List 请求参数
+type ListReq struct {
+    Page  int    `src:"query" default:"1"`
+    Size  int    `src:"query" default:"20"`
+    Sort  string `src:"query"`
+    Query string `src:"query"`  // 模糊搜索
+}
+func ListUsers(x *vigo.X, req *ListReq) ([]*User, error) {
+    // ... 业务逻辑 ...
 }
 ```
 
@@ -361,69 +371,4 @@ redis := &config.Redis{
     DB:       0,
 }
 client := redis.Client()
-```
-
-## crud - 自动 CRUD
-
-```go
-import "github.com/veypi/vigo/contrib/crud"
-
-// 定义模型
-type User struct {
-    vigo.Model
-    Name  string `json:"name"`
-    Email string `json:"email"`
-}
-
-// 创建 CRUD 控制器
-ctrl := crud.New(&User{})
-
-// 注册全部路由(get,list,crate, update, delete)
-ctrl.Register(r.SubRouter("/users"))
-
-// 只注册指定动作
-ctrl.Register(r.SubRouter("/users"), "list", "get")
-
-// 自定义配置, 一般不需要配置，默认解析xxx_id和搜索带name的字段
-ctrl.SetIDParam("user_id").
-    SetListQueryFields("name", "email").
-    SetFilter(func(x *vigo.X, db *gorm.DB) (*gorm.DB, error) {
-        // 全局过滤，适用于所有接口(Get/List/Create/Update/Delete)
-        // 可用于实现数据权限控制，例如只允许操作自己的数据
-        if uid := x.Get("user_id"); uid != nil {
-             return db.Where("user_id = ?", uid), nil
-        }
-        return nil, vigo.ErrNotPermitted
-    }).
-    SetBeforeCreate(func(x *vigo.X, req *User) error {
-        // 强制设置创建人
-        if uid := x.Get("user_id"); uid != nil {
-            req.UserID = uid.(string)
-        }
-        return nil
-    }).
-    SetBeforeUpdate(func(x *vigo.X, data map[string]any) error {
-        // 禁止修改某些字段，或者记录修改人
-        delete(data, "created_at")
-        if uid := x.Get("user_id"); uid != nil {
-            data["updated_by"] = uid
-        }
-        return nil
-    }).
-    Register(r)
-
-// 生成的路由
-// GET    /users        - List (分页/搜索)
-// POST   /users        - Create
-// GET    /users/{user_id}   - Get
-// PATCH  /users/{user_id}   - Update (部分更新)
-// DELETE /users/{user_id}   - Delete
-
-// List 请求参数
-type ListReq struct {
-    Page  int    `src:"query" default:"1"`
-    Size  int    `src:"query" default:"20"`
-    Sort  string `src:"query"`
-    Query string `src:"query"`  // 模糊搜索
-}
 ```

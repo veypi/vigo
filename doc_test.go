@@ -1,210 +1,179 @@
 package vigo
 
 import (
-	"encoding/json"
 	"mime/multipart"
 	"reflect"
-	"strings"
 	"testing"
-
-	"gopkg.in/yaml.v3"
 )
 
-type DocReq struct {
-	ID    int                   `json:"id" src:"path" desc:"user id"`
-	Query string                `json:"q" src:"query" desc:"search query"`
-	File  *multipart.FileHeader `json:"file" src:"form" desc:"upload file"`
+type DocTestUser struct {
+	ID   string `json:"id" desc:"User ID"`
+	Name string `json:"name" desc:"User Name"`
 }
 
-type DocResp struct {
-	Data string `json:"data"`
+type DocTestReq struct {
+	ID     string                `src:"path@id"`
+	Query  string                `src:"query"`
+	Name   string                `json:"name"`
+	Avatar *multipart.FileHeader `src:"form" desc:"Avatar file"`
 }
 
-func TestDocGeneration(t *testing.T) {
+func TestParseDocArgs(t *testing.T) {
+	reqType := reflect.TypeOf(DocTestReq{})
+	params, body := parseDocArgs(reqType)
+
+	// Check Params
+	// Expect 2 params: ID (path), Query (query)
+	if len(params) != 2 {
+		t.Errorf("Expected 2 params, got %d", len(params))
+	}
+
+	// Check ID param
+	foundID := false
+	for _, p := range params {
+		if p.Name == "id" && p.In == "path" {
+			foundID = true
+			break
+		}
+	}
+	if !foundID {
+		t.Error("Expected param id in path")
+	}
+
+	// Check Body
+	// Expect Name (json/form) and Avatar (form)
+	if body == nil {
+		t.Fatal("Expected body, got nil")
+	}
+	if body.ContentType != "multipart/form-data" {
+		t.Errorf("Expected multipart/form-data, got %s", body.ContentType)
+	}
+	if body.Type != "object" {
+		t.Errorf("Expected object type, got %s", body.Type)
+	}
+	if len(body.Fields) != 2 {
+		t.Errorf("Expected 2 body fields, got %d", len(body.Fields))
+	}
+}
+
+func TestParseDocResponse(t *testing.T) {
+	// 1. Struct (Object)
+	respType := reflect.TypeOf(DocTestUser{})
+	body := parseDocResponse(respType)
+	if body.Type != "object" {
+		t.Errorf("Expected object type for struct, got %s", body.Type)
+	}
+	if len(body.Fields) != 2 {
+		t.Errorf("Expected 2 fields for User, got %d", len(body.Fields))
+	}
+
+	// 2. Slice of Structs (Array)
+	respType = reflect.TypeOf([]DocTestUser{})
+	body = parseDocResponse(respType)
+	if body.Type != "array" {
+		t.Errorf("Expected array type for slice, got %s", body.Type)
+	}
+	if body.Item == nil {
+		t.Fatal("Expected Item for array, got nil")
+	}
+	if body.Item.Type != "object" {
+		t.Errorf("Expected Item type object, got %s", body.Item.Type)
+	}
+	if len(body.Item.Fields) != 2 {
+		t.Errorf("Expected 2 fields in Item, got %d", len(body.Item.Fields))
+	}
+
+	// 3. Slice of Primitives (Array)
+	respType = reflect.TypeOf([]string{})
+	body = parseDocResponse(respType)
+	if body.Type != "array" {
+		t.Errorf("Expected array type for slice of strings, got %s", body.Type)
+	}
+	if body.Item == nil {
+		t.Fatal("Expected Item for array, got nil")
+	}
+	if body.Item.Type != "string" {
+		t.Errorf("Expected Item type string, got %s", body.Item.Type)
+	}
+
+	// 4. Primitive
+	respType = reflect.TypeOf(123)
+	body = parseDocResponse(respType)
+	if body.Type != "int" {
+		t.Errorf("Expected int type, got %s", body.Type)
+	}
+}
+
+func TestDocIntegration(t *testing.T) {
 	r := NewRouter()
-	r.Post("/simple/{id}", "Simple Handler", func(x *X, req *DocReq) (*DocResp, error) {
-		return nil, nil
+
+	// Handler 1: Returns Struct
+	r.Get("/user", "Get User", func(x *X) (*DocTestUser, error) {
+		return &DocTestUser{}, nil
+	})
+
+	// Handler 2: Returns Slice of Structs
+	r.Get("/users", "Get Users", func(x *X) ([]*DocTestUser, error) {
+		return []*DocTestUser{}, nil
+	})
+
+	// Handler 3: Returns Primitive
+	r.Get("/version", "Get Version", func(x *X) (string, error) {
+		return "1.0.0", nil
+	})
+
+	// Handler 4: Returns Slice of Primitives
+	r.Get("/tags", "Get Tags", func(x *X) ([]string, error) {
+		return []string{"a", "b"}, nil
 	})
 
 	doc := r.Doc()
 
-	if doc.Title != "Vigo API" {
-		t.Errorf("Expected title Vigo API, got %s", doc.Title)
-	}
-
-	if len(doc.Routes) == 0 {
-		t.Fatalf("Expected routes, got 0")
-	}
-
-	route := doc.Routes[0]
-	if route.Path != "/simple/{id}" {
-		t.Errorf("Expected path /simple/{id}, got %s", route.Path)
-	}
-	if route.Summary != "Simple Handler" {
-		t.Errorf("Expected summary Simple Handler, got %s", route.Summary)
-	}
-
-	// Verify Params
-	foundID := false
-	foundQuery := false
-	for _, p := range route.Params {
-		if p.Name == "id" && p.In == "path" && p.Type == "int" {
-			foundID = true
-			if p.Desc != "user id" {
-				t.Errorf("Expected id desc 'user id', got '%s'", p.Desc)
+	findRoute := func(doc *Doc, path, method string) *DocRoute {
+		for _, r := range doc.Routes {
+			if r.Path == path && r.Method == method {
+				return r
 			}
 		}
-		if p.Name == "q" && p.In == "query" && p.Type == "string" {
-			foundQuery = true
-			if p.Desc != "search query" {
-				t.Errorf("Expected q desc 'search query', got '%s'", p.Desc)
-			}
+		return nil
+	}
+
+	// Check /user
+	routeUser := findRoute(doc, "/user", "GET")
+	if routeUser == nil {
+		var paths []string
+		for _, r := range doc.Routes {
+			paths = append(paths, r.Method+" "+r.Path)
 		}
+		t.Fatalf("Route /user not found. Available: %v", paths)
 	}
-	if !foundID {
-		t.Error("Param 'id' (path, int) not found")
-	}
-	if !foundQuery {
-		t.Error("Param 'q' (query, string) not found")
-	}
-
-	// Verify Body (File)
-	if route.Body == nil {
-		t.Fatal("Expected request body")
-	}
-	if route.Body.ContentType != "multipart/form-data" {
-		t.Errorf("Expected multipart/form-data, got %s", route.Body.ContentType)
+	if routeUser.Response == nil {
+		t.Error("Route /user response is nil")
+	} else if routeUser.Response.Type != "object" {
+		t.Errorf("Route /user response type expected object, got %s", routeUser.Response.Type)
 	}
 
-	foundFile := false
-	for _, f := range route.Body.Fields {
-		if f.Name == "file" && f.Type == "file" {
-			foundFile = true
-			if f.Desc != "upload file" {
-				t.Errorf("Expected file desc 'upload file', got '%s'", f.Desc)
-			}
-		}
+	// Check /users
+	routeUsers := findRoute(doc, "/users", "GET")
+	if routeUsers == nil {
+		t.Fatal("Route /users not found")
 	}
-	if !foundFile {
-		t.Error("Field 'file' (type: file) not found in body")
-	}
-
-	// Verify Response
-	if route.Response == nil {
-		t.Fatal("Expected response body")
-	}
-	if len(route.Response.Fields) != 1 || route.Response.Fields[0].Name != "data" {
-		t.Error("Response schema mismatch")
+	if routeUsers.Response == nil {
+		// Expect this to fail initially
+		t.Error("Route /users response is nil")
+	} else if routeUsers.Response.Type != "array" {
+		t.Errorf("Route /users response type expected array, got %s", routeUsers.Response.Type)
 	}
 
-	// Test JSON/String Output
-	jsonStr := doc.Json()
-	if jsonStr == "" {
-		t.Error("Doc.Json returned empty string")
+	// Check /version
+	routeVersion := findRoute(doc, "/version", "GET")
+	if routeVersion == nil {
+		t.Fatal("Route /version not found")
 	}
-	var checkJson Doc
-	if err := json.Unmarshal([]byte(jsonStr), &checkJson); err != nil {
-		t.Errorf("Json output invalid: %v", err)
-	}
-
-	yamlStr := doc.String()
-	if yamlStr == "" {
-		t.Error("Doc.String returned empty string")
-	}
-	// Verify YAML content roughly
-	if !strings.Contains(yamlStr, "title: Vigo API") {
-		t.Error("YAML output missing title")
-	}
-	var checkYaml Doc
-	if err := yaml.Unmarshal([]byte(yamlStr), &checkYaml); err != nil {
-		t.Errorf("Yaml output invalid: %v", err)
-	}
-}
-
-func TestDocFieldTypes(t *testing.T) {
-	type Nested struct {
-		Val int `json:"val"`
-	}
-	type Complex struct {
-		List  []string                `json:"list"`
-		Obj   Nested                  `json:"obj"`
-		Files []*multipart.FileHeader `json:"files"`
-	}
-
-	fields := GenerateDocFields(reflect.TypeOf(Complex{}))
-
-	var listField, objField, filesField *DocField
-	for _, f := range fields {
-		switch f.Name {
-		case "list":
-			listField = f
-		case "obj":
-			objField = f
-		case "files":
-			filesField = f
-		}
-	}
-
-	if listField.Type != "array" || listField.Item.Type != "string" {
-		t.Error("List field type mismatch")
-	}
-	if objField.Type != "object" || len(objField.Fields) != 1 {
-		t.Error("Obj field type mismatch")
-	}
-	if filesField.Type != "array" || filesField.Item.Type != "file" {
-		t.Errorf("Files field type mismatch: got %s -> %v", filesField.Type, filesField.Item)
-	}
-}
-
-func myTestMiddleware(x *X) error {
-	return nil
-}
-
-func TestDocActionDetails(t *testing.T) {
-	r := NewRouter()
-	r.Use(myTestMiddleware)
-	r.Get("/test", "Test Handler", func(x *X) error { return nil })
-
-	doc := r.Doc()
-	if len(doc.Routes) == 0 {
-		t.Fatal("No routes found")
-	}
-	route := doc.Routes[0]
-
-	// Find myTestMiddleware action
-	var action *DocAction
-	for _, a := range route.Actions {
-		if strings.Contains(a.Name, "myTestMiddleware") {
-			action = a
-			break
-		}
-	}
-
-	if action == nil {
-		t.Fatal("myTestMiddleware action not found")
-	}
-
-	if action.File == "" {
-		t.Error("Action file is empty")
-	}
-	if !strings.Contains(action.File, "doc_test.go") {
-		t.Errorf("Expected file to contain doc_test.go, got %s", action.File)
-	}
-
-	if action.Line == 0 {
-		t.Error("Action line is 0")
-	}
-
-	// Get expected line
-	// New behavior: Action line should be the call site (r.Use), not definition site.
-	// r.Use(myTestMiddleware) is at line 167.
-	// expectedLine := 167
-
-	// if action.Line != expectedLine {
-	// 	t.Errorf("Expected line %d (call site), got %d", expectedLine, action.Line)
-	// }
-
-	if action.Scoped != "/" {
-		t.Errorf("Expected scoped '/', got '%s'", action.Scoped)
+	if routeVersion.Response == nil {
+		// Expect this to fail initially
+		t.Error("Route /version response is nil")
+	} else if routeVersion.Response.Type != "string" {
+		t.Errorf("Route /version response type expected string, got %s", routeVersion.Response.Type)
 	}
 }

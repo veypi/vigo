@@ -585,7 +585,9 @@ func (r *route) Set(prefix string, method string, handlers ...any) Router {
 				if resType.Kind() == reflect.Ptr {
 					resType = resType.Elem()
 				}
-				if resType.Kind() == reflect.Struct {
+				k := resType.Kind()
+				if k == reflect.Struct || k == reflect.Slice || k == reflect.Array || k == reflect.Map ||
+					(k >= reflect.Bool && k <= reflect.Float64) || k == reflect.String {
 					if response == nil {
 						response = reflect.New(resType).Interface()
 					}

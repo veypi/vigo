@@ -452,6 +452,15 @@
     </div>
 
     <div class="actions">
+      <button class="btn" onclick="openGlobalHeadersModal()">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round">
+          <line x1="4" y1="6" x2="20" y2="6"></line>
+          <line x1="4" y1="12" x2="20" y2="12"></line>
+          <line x1="4" y1="18" x2="20" y2="18"></line>
+        </svg>
+        Headers
+      </button>
       <button class="btn" onclick="openEnvModal()">
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
           stroke-linecap="round" stroke-linejoin="round">
@@ -475,6 +484,25 @@
       <div class="text-center" style="padding: 40px; color: #888;">Loading API definition...</div>
     </div>
   </main>
+
+  <!-- Global Headers Modal -->
+  <div id="globalHeadersModal" class="modal-overlay">
+    <div class="modal">
+      <div class="modal-header">
+        <span>Global Headers</span>
+        <button class="btn-icon" onclick="closeModal('globalHeadersModal')">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="text-sm" style="margin-bottom: 15px; color: #666;">Headers automatically added to every request.</p>
+        <div id="globalHeadersList"></div>
+        <button class="btn" onclick="addGlobalHeaderRow()" style="margin-top: 10px;">+ Add Header</button>
+      </div>
+      <div class="modal-footer">
+        <button class="btn" onclick="closeModal('globalHeadersModal')">Cancel</button>
+        <button class="btn btn-primary" onclick="saveGlobalHeaders()">Save</button>
+      </div>
+    </div>
+  </div>
 
   <!-- Env Modal -->
   <div id="envModal" class="modal-overlay">
@@ -563,6 +591,7 @@
     const API_JSON_URL = "{{.}}"; // Injected by Go template
     let apiData = null;
     let envs = JSON.parse(localStorage.getItem('vigo_envs') || '{}');
+    let globalHeaders = JSON.parse(localStorage.getItem('vigo_global_headers') || '{}');
 
     // DOM Elements
     const apiListEl = document.getElementById('apiList');
@@ -614,15 +643,36 @@
 
         // Body HTML
         let bodyHtml = '';
-        if (route.body && route.body.fields) {
-          bodyHtml = `
-                    <div class="section-title">Request Body (${route.body.content_type})</div>
+        if (route.body) {
+          const bodyContent = renderDocBody(route.body, true);
+          if (bodyContent) {
+            bodyHtml = `
+                    <div class="section-title">Request Body (${route.body.content_type || 'application/json'})</div>
                     <table class="params-table">
                         <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Desc</th></tr></thead>
                         <tbody>
-                            ${renderBodyFields(route.body.fields)}
+                            ${bodyContent}
                         </tbody>
                     </table>`;
+          }
+        }
+
+        // Response HTML
+        let responseHtml = '';
+        if (route.response) {
+          const respContent = renderDocBody(route.response, false);
+          if (respContent) {
+            responseHtml = `
+                    <div class="section-title">Response (${route.response.content_type || 'application/json'})</div>
+                    <table class="params-table">
+                        <thead><tr><th>Field</th><th>Type</th><th>Desc</th></tr></thead>
+                        <tbody>
+                            ${respContent}
+                        </tbody>
+                    </table>`;
+          } else {
+            responseHtml = `<div class="section-title">Response</div><pre>${JSON.stringify(route.response, null, 2)}</pre>`;
+          }
         }
 
         item.innerHTML = `
@@ -637,23 +687,70 @@
                 <div class="api-details" id="details-${index}">
                     ${paramsHtml}
                     ${bodyHtml}
-                    ${route.response ? `<div class="section-title">Response</div><pre>${JSON.stringify(route.response, null, 2)}</pre>` : ''}
+                    ${responseHtml}
                 </div>
             `;
         apiListEl.appendChild(item);
       });
     }
 
-    function renderBodyFields(fields, prefix = '') {
-      return fields.map(f => `
+    function renderDocBody(body, showRequired) {
+      if (!body) return '';
+
+      // Case 1: Object with fields
+      if (body.type === 'object' && body.fields && body.fields.length > 0) {
+        return renderBodyFields(body.fields, '', showRequired);
+      }
+
+      // Case 2: Array
+      if (body.type === 'array' && body.item) {
+        // If array of objects, flatten it to show fields with [].prefix
+        if (body.item.type === 'object' && body.item.fields) {
+          return renderBodyFields(body.item.fields, '[].', showRequired);
+        }
+        // Array of primitives: show one row for the item
+        const item = Object.assign({}, body.item);
+        item.name = '';
+        return renderBodyFields([item], '[]', showRequired);
+      }
+
+      // Case 3: Primitive (int, string, bool)
+      // If type is set but fields/item are not appropriate
+      if (body.type && body.type !== 'object' && body.type !== 'array') {
+        const rootField = {
+          name: '',
+          type: body.type,
+          required: true,
+          desc: '-'
+        };
+        return renderBodyFields([rootField], '', showRequired);
+      }
+
+      return '';
+    }
+
+    function renderBodyFields(fields, prefix = '', showRequired = true) {
+      return fields.map(f => {
+        const name = prefix + f.name;
+        let html = `
             <tr>
-                <td>${prefix}${f.name}</td>
+                <td>${name || (f.type === 'array' ? '<span class="text-light">[Root Array]</span>' : '')}</td>
                 <td><code>${f.type}</code></td>
-                <td>${f.required ? '<span class="badge required">Yes</span>' : 'No'}</td>
+                ${showRequired ? `<td>${f.required ? '<span class="badge required">Yes</span>' : 'No'}</td>` : ''}
                 <td>${f.desc || '-'}</td>
-            </tr>
-            ${f.fields ? renderBodyFields(f.fields, prefix + f.name + '.') : ''}
-        `).join('');
+            </tr>`;
+        if (f.fields) {
+          html += renderBodyFields(f.fields, name + '.', showRequired);
+        }
+        if (f.item) {
+          if (f.item.fields) {
+            html += renderBodyFields(f.item.fields, name + '[].', showRequired);
+          } else {
+            html += renderBodyFields([f.item], name + '[]', showRequired);
+          }
+        }
+        return html;
+      }).join('');
     }
 
     function toggleDetails(index) {
@@ -702,6 +799,38 @@
       envs = newEnvs;
       localStorage.setItem('vigo_envs', JSON.stringify(envs));
       closeModal('envModal');
+    }
+
+    // Global Headers Modal Logic
+    function openGlobalHeadersModal() {
+      const list = document.getElementById('globalHeadersList');
+      list.innerHTML = '';
+      Object.entries(globalHeaders).forEach(([k, v]) => addGlobalHeaderRow(k, v));
+      if (Object.keys(globalHeaders).length === 0) addGlobalHeaderRow();
+      document.getElementById('globalHeadersModal').classList.add('active');
+    }
+
+    function addGlobalHeaderRow(key = '', val = '') {
+      const div = document.createElement('div');
+      div.className = 'env-row'; // Reuse env-row styling
+      div.innerHTML = `
+            <input placeholder="Header Name" value="${key}" class="global-header-key">
+            <input placeholder="Value" value="${val}" class="global-header-val">
+            <button class="btn-icon" onclick="this.parentElement.remove()">🗑</button>
+        `;
+      document.getElementById('globalHeadersList').appendChild(div);
+    }
+
+    function saveGlobalHeaders() {
+      const newHeaders = {};
+      document.querySelectorAll('#globalHeadersList .env-row').forEach(row => {
+        const k = row.querySelector('.global-header-key').value.trim();
+        const v = row.querySelector('.global-header-val').value.trim();
+        if (k) newHeaders[k] = v;
+      });
+      globalHeaders = newHeaders;
+      localStorage.setItem('vigo_global_headers', JSON.stringify(globalHeaders));
+      closeModal('globalHeadersModal');
     }
 
     // Request Modal Logic
@@ -838,7 +967,7 @@
       }
 
       // Headers
-      const headers = {};
+      const headers = {...globalHeaders};
       document.querySelectorAll('#reqHeadersList .req-row').forEach(row => {
         const k = row.querySelector('.req-header-key').value.trim();
         const v = substituteVars(row.querySelector('.req-header-val').value.trim());

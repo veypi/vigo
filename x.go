@@ -171,13 +171,6 @@ func (x *X) GetRemoteIP() string {
 	return ip
 }
 
-func (x *X) setParam(k string, v string) {
-	x.PathParams = append(x.PathParams, Param{
-		Key:   k,
-		Value: v,
-	})
-}
-
 var xPool = sync.Pool{
 	New: func() any {
 		return &X{
