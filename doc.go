@@ -263,64 +263,81 @@ func parseDocArgs(t reflect.Type) ([]*DocParam, *DocBody) {
 	var params []*DocParam
 	var body *DocBody
 
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		if field.PkgPath != "" {
-			continue
+	// Helper to process fields recursively for embedded structs
+	var processFields func(t reflect.Type)
+	processFields = func(t reflect.Type) {
+		if t.Kind() == reflect.Ptr {
+			t = t.Elem()
 		}
-		tag := field.Tag.Get("src")
-		jsonTag := field.Tag.Get("json")
-		desc := field.Tag.Get("desc")
-		name := strings.Split(jsonTag, ",")[0]
-		if name == "" {
-			name = field.Name
-		}
-		if name == "-" {
-			continue
+		if t.Kind() != reflect.Struct {
+			return
 		}
 
-		parts := strings.Split(tag, "@")
-		source := parts[0]
-		if source == "" {
-			source = "json" // Default
-		}
-
-		switch source {
-		case "path", "query", "header":
-			p := &DocParam{
-				Name:     name,
-				In:       source,
-				Type:     getDocType(field.Type),
-				Required: field.Type.Kind() != reflect.Ptr, // Pointer = Optional
-				Desc:     desc,
+		for i := 0; i < t.NumField(); i++ {
+			field := t.Field(i)
+			if field.PkgPath != "" {
+				continue
 			}
-			if source == "path" && len(parts) > 1 {
-				p.Name = parts[1] // Use alias for path param
-			}
-			params = append(params, p)
+			tag := field.Tag.Get("src")
+			jsonTag := field.Tag.Get("json")
+			desc := field.Tag.Get("desc")
+			name := strings.Split(jsonTag, ",")[0]
 
-		case "json", "form":
-			if body == nil {
-				body = &DocBody{
-					Type:   "object",
-					Fields: make([]*DocField, 0),
+			// Handle embedded struct (Anonymous)
+			if field.Anonymous && (jsonTag == "" || jsonTag == ",") {
+				processFields(field.Type)
+				continue
+			}
+
+			if name == "" {
+				name = field.Name
+			}
+			if name == "-" {
+				continue
+			}
+
+			parts := strings.Split(tag, "@")
+			source := parts[0]
+			if source == "" {
+				source = "json" // Default
+			}
+
+			switch source {
+			case "path", "query", "header":
+				p := &DocParam{
+					Name:     name,
+					In:       source,
+					Type:     getDocType(field.Type),
+					Required: field.Type.Kind() != reflect.Ptr, // Pointer = Optional
+					Desc:     desc,
+				}
+				if source == "path" && len(parts) > 1 {
+					p.Name = parts[1] // Use alias for path param
+				}
+				params = append(params, p)
+
+			case "json", "form":
+				if body == nil {
+					body = &DocBody{
+						Type:   "object",
+						Fields: make([]*DocField, 0),
+					}
+					if source == "form" {
+						body.ContentType = "multipart/form-data"
+					} else {
+						body.ContentType = "application/json"
+					}
 				}
 				if source == "form" {
 					body.ContentType = "multipart/form-data"
-				} else {
-					body.ContentType = "application/json"
 				}
-			}
-			// If mixed json/form, prefer form if any field is form?
-			// Vigo parser allows mixed? Usually one or the other.
-			// If we see "form", switch to multipart/form-data.
-			if source == "form" {
-				body.ContentType = "multipart/form-data"
-			}
 
-			body.Fields = append(body.Fields, generateDocField(field.Type, name, desc))
+				body.Fields = append(body.Fields, generateDocField(field.Type, name, desc))
+			}
 		}
 	}
+
+	processFields(t)
 	return params, body
 }
 
@@ -380,23 +397,42 @@ func GenerateDocFields(t reflect.Type) []*DocField {
 	}
 
 	var fields []*DocField
-	for i := 0; i < t.NumField(); i++ {
-		field := t.Field(i)
-		// ignore private fields
-		if field.PkgPath != "" {
-			continue
+	// Helper to process fields recursively for embedded structs
+	var processFields func(t reflect.Type)
+	processFields = func(t reflect.Type) {
+		if t.Kind() == reflect.Ptr {
+			t = t.Elem()
 		}
-		jsonTag := field.Tag.Get("json")
-		if jsonTag == "-" {
-			continue
-		}
-		name := strings.Split(jsonTag, ",")[0]
-		if name == "" {
-			name = field.Name
+		if t.Kind() != reflect.Struct {
+			return
 		}
 
-		fields = append(fields, generateDocField(field.Type, name, field.Tag.Get("desc")))
+		for i := 0; i < t.NumField(); i++ {
+			field := t.Field(i)
+			// ignore private fields
+			if field.PkgPath != "" {
+				continue
+			}
+			jsonTag := field.Tag.Get("json")
+			if jsonTag == "-" {
+				continue
+			}
+			name := strings.Split(jsonTag, ",")[0]
+
+			// Handle embedded struct (Anonymous)
+			if field.Anonymous && (jsonTag == "" || jsonTag == ",") {
+				processFields(field.Type)
+				continue
+			}
+
+			if name == "" {
+				name = field.Name
+			}
+
+			fields = append(fields, generateDocField(field.Type, name, field.Tag.Get("desc")))
+		}
 	}
+	processFields(t)
 	return fields
 }
 

@@ -18,6 +18,21 @@ type DocTestReq struct {
 	Avatar *multipart.FileHeader `src:"form" desc:"Avatar file"`
 }
 
+type DocBaseReq struct {
+	Page int `src:"query" desc:"Page number"`
+}
+
+type DocAnonReq struct {
+	DocBaseReq
+	Size int    `src:"query" desc:"Page size"`
+	Name string `json:"name"`
+}
+
+type DocNamedReq struct {
+	Base DocBaseReq  `json:"base"`
+	User DocTestUser `json:"user"`
+}
+
 func TestParseDocArgs(t *testing.T) {
 	reqType := reflect.TypeOf(DocTestReq{})
 	params, body := parseDocArgs(reqType)
@@ -53,6 +68,76 @@ func TestParseDocArgs(t *testing.T) {
 	}
 	if len(body.Fields) != 2 {
 		t.Errorf("Expected 2 body fields, got %d", len(body.Fields))
+	}
+}
+
+func TestParseDocArgs_Anonymous(t *testing.T) {
+	reqType := reflect.TypeOf(DocAnonReq{})
+	params, body := parseDocArgs(reqType)
+
+	// Expect 2 query params: Page (from embedded) and Size
+	if len(params) != 2 {
+		t.Errorf("Expected 2 params, got %d", len(params))
+	}
+	foundPage := false
+	foundSize := false
+	for _, p := range params {
+		if p.Name == "Page" && p.In == "query" {
+			foundPage = true
+		}
+		if p.Name == "Size" && p.In == "query" {
+			foundSize = true
+		}
+	}
+	if !foundPage {
+		t.Error("Expected embedded param Page")
+	}
+	if !foundSize {
+		t.Error("Expected param Size")
+	}
+
+	// Expect 1 body field: Name
+	// (DocBaseReq fields should NOT be in body because they are src:"query")
+	// Wait, if DocBaseReq had json fields, they should be here too flattened.
+	// But DocBaseReq only has Page (query).
+	// So only Name should be in body.
+	if body == nil {
+		t.Fatal("Expected body")
+	}
+	if len(body.Fields) != 1 {
+		t.Errorf("Expected 1 body field, got %d", len(body.Fields))
+	}
+	if body.Fields[0].Name != "name" {
+		t.Errorf("Expected field name, got %s", body.Fields[0].Name)
+	}
+}
+
+func TestParseDocArgs_Named(t *testing.T) {
+	reqType := reflect.TypeOf(DocNamedReq{})
+	params, body := parseDocArgs(reqType)
+
+	// DocNamedReq has Base (json) and User (json).
+	// No top level params (unless recursively found? No, they are json fields).
+	if len(params) != 0 {
+		t.Errorf("Expected 0 params, got %d", len(params))
+	}
+
+	if body == nil {
+		t.Fatal("Expected body")
+	}
+	// Expect 2 fields: base, user
+	if len(body.Fields) != 2 {
+		t.Errorf("Expected 2 body fields, got %d", len(body.Fields))
+	}
+	names := make(map[string]bool)
+	for _, f := range body.Fields {
+		names[f.Name] = true
+	}
+	if !names["base"] {
+		t.Error("Expected field base")
+	}
+	if !names["user"] {
+		t.Error("Expected field user")
 	}
 }
 
