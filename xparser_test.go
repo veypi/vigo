@@ -89,16 +89,16 @@ func TestParseEmptyVsMissing(t *testing.T) {
 		// Create request with Query and Body
 		// We use empty strings for values
 		// Note: Field names are snake_cased by default if no alias provided
-		u, _ := url.Parse("/?q_req=")
+		u, _ := url.Parse("/?QReq=")
 
 		form := url.Values{}
-		form.Add("f_req", "")
+		form.Add("FReq", "")
 
 		req, _ := http.NewRequest("POST", u.String(), strings.NewReader(form.Encode()))
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 
 		// Set Header
-		req.Header.Set("h_req", "")
+		req.Header.Set("HReq", "")
 
 		x := acquire()
 		x.Request = req
@@ -106,7 +106,7 @@ func TestParseEmptyVsMissing(t *testing.T) {
 
 		// Set Path
 		x.PathParams = PathParams{
-			{Key: "p_req", Value: ""},
+			{Key: "PReq", Value: ""},
 		}
 
 		return x
@@ -117,20 +117,20 @@ func TestParseEmptyVsMissing(t *testing.T) {
 		x := setupBaseReq()
 		// Also add optional fields as empty to ensure they work too
 		q := x.Request.URL.Query()
-		q.Add("q_opt", "")
+		q.Add("QOpt", "")
 		x.Request.URL.RawQuery = q.Encode()
 
-		x.Request.Header.Set("h_opt", "")
+		x.Request.Header.Set("HOpt", "")
 
 		// Append to form body
 		// Note: Reading body again requires creating new reader as previous one might be consumed if we didn't use createTestX helper correctly or if Parse consumes it.
 		// Since setupBaseReq creates a fresh request with body, we can just recreate the body with more params.
 		form := url.Values{}
-		form.Add("f_req", "")
-		form.Add("f_opt", "")
+		form.Add("FReq", "")
+		form.Add("FOpt", "")
 		x.Request.Body = io.NopCloser(strings.NewReader(form.Encode()))
 
-		x.PathParams = append(x.PathParams, Param{Key: "p_opt", Value: ""})
+		x.PathParams = append(x.PathParams, Param{Key: "POpt", Value: ""})
 
 		defer release(x)
 
@@ -181,17 +181,17 @@ func TestParseEmptyVsMissing(t *testing.T) {
 			remove: func(x *X) {
 				// Rebuild query without q_req
 				q := x.Request.URL.Query()
-				q.Del("q_req")
+				q.Del("QReq")
 				x.Request.URL.RawQuery = q.Encode()
 			},
-			expectErr: "q_req",
+			expectErr: "QReq",
 		},
 		{
 			name: "Missing Header Required",
 			remove: func(x *X) {
-				x.Request.Header.Del("h_req")
+				x.Request.Header.Del("HReq")
 			},
-			expectErr: "h_req",
+			expectErr: "HReq",
 		},
 		{
 			name: "Missing Form Required",
@@ -202,7 +202,7 @@ func TestParseEmptyVsMissing(t *testing.T) {
 				// form.Add("f_req", "") // Don't add
 				x.Request.Body = io.NopCloser(strings.NewReader(form.Encode()))
 			},
-			expectErr: "f_req",
+			expectErr: "FReq",
 		},
 		{
 			name: "Missing Path Required",
@@ -210,7 +210,7 @@ func TestParseEmptyVsMissing(t *testing.T) {
 				// Rebuild path params without p_req
 				x.PathParams = PathParams{}
 			},
-			expectErr: "p_req",
+			expectErr: "PReq",
 		},
 	}
 
@@ -241,7 +241,7 @@ func TestParseQuery(t *testing.T) {
 		Sort string `src:"query"`
 	}
 
-	x, _ := createTestX("GET", "/?page=2&sort=desc", nil)
+	x, _ := createTestX("GET", "/?Page=2&Sort=desc", nil)
 	defer release(x)
 
 	var target QueryReq
@@ -265,8 +265,8 @@ func TestParseForm(t *testing.T) {
 	}
 
 	form := url.Values{}
-	form.Add("username", "bob")
-	form.Add("active", "true")
+	form.Add("Username", "bob")
+	form.Add("Active", "true")
 
 	req, _ := http.NewRequest("POST", "/", strings.NewReader(form.Encode()))
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
@@ -300,7 +300,7 @@ func TestParsePath(t *testing.T) {
 	defer release(x)
 
 	// Manually set path params as if router matched them
-	x.PathParams = PathParams{Param{Key: "id", Value: "123"}, Param{Key: "slug", Value: "profile"}}
+	x.PathParams = PathParams{Param{Key: "ID", Value: "123"}, Param{Key: "Slug", Value: "profile"}}
 
 	var target PathReq
 	err := x.Parse(&target)
@@ -372,9 +372,9 @@ func TestParseMix(t *testing.T) {
 	}
 
 	payload := map[string]string{"title": "Hello"}
-	x, _ := createTestX("POST", "/posts/99?page=5", payload)
+	x, _ := createTestX("POST", "/posts/99?Page=5", payload)
 	defer release(x)
-	x.PathParams = PathParams{Param{Key: "id", Value: "99"}}
+	x.PathParams = PathParams{Param{Key: "ID", Value: "99"}}
 
 	var target MixReq
 	err := x.Parse(&target)

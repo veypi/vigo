@@ -18,8 +18,6 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/veypi/vigo/utils"
 )
 
 var parserErr = &Error{Code: http.StatusConflict, Message: "parser arg %s with error: %s"}
@@ -93,7 +91,7 @@ func getOrCreateTypeInfo(rt reflect.Type) *typeInfo {
 
 		fieldName := jsonTag
 		if fieldName == "" {
-			fieldName = utils.CamelToSnake(field.Name)
+			fieldName = field.Name
 		}
 
 		if strings.Contains(parseTag, "@") {

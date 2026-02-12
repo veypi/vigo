@@ -232,7 +232,7 @@ func TestPipeline_Standardize(t *testing.T) {
 
 	r.Get("/query", queryHandler, jsonResponse)
 
-	req := httptest.NewRequest(http.MethodGet, "/query?name=Vigo", nil)
+	req := httptest.NewRequest(http.MethodGet, "/query?Name=Vigo", nil)
 	w := httptest.NewRecorder()
 	r.ServeHTTP(w, req)
 
@@ -264,7 +264,7 @@ func TestPipeline_AutoStandardize(t *testing.T) {
 	}
 
 	// Register directly
-	r.Get("/auto/{id}", autoHandler, jsonResponse)
+	r.Get("/auto/{ID}", autoHandler, jsonResponse)
 
 	req := httptest.NewRequest(http.MethodGet, "/auto/123", nil)
 	w := httptest.NewRecorder()
