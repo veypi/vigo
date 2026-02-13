@@ -103,7 +103,6 @@ func init() {
 推荐直接使用带有参数结构体的 Handler，框架会自动进行解析。
 
 ### 4.1 标签语法
-
 格式: `src:"source[@alias]"`
 
 - `path`: 路径参数 (默认匹配同名字段，可指定 `@alias`)
@@ -111,15 +110,14 @@ func init() {
 - `header`: 请求头
 - `json`: JSON 请求体 (默认)
 - `form`: 表单数据 (支持 `application/x-www-form-urlencoded` 和 `multipart/form-data`)
-
 **注意**:
-
 - **必填项规则**:
   - **非指针类型**（如 `string`, `int`）默认为**必填**。如果请求中缺少该参数，解析会失败并返回 `409 Invalid Arg` 错误。（注：空值如 `?name=` 被视为参数存在，是合法的）
   - **指针类型**（如 `*string`, `*int`）为**可选**。如果请求中缺少该参数，字段值为 `nil`。
 - `default` 标签可设置默认值，但仅对**非指针**和**非 JSON**字段有效。
 - `desc`: 参数描述 (用于生成文档)
 - `json` 标签用于指定 JSON 字段名。
+- 参数命名优先级：`@alias` > `json` 标签 > 字段名
 
 ### 4.2 文件上传与复杂结构体示例
 
@@ -184,10 +182,10 @@ func CreateUser(x *vigo.X, req *CreateReq) (*User, error) {
 }
 // List 请求参数
 type ListReq struct {
-    Page  int    `src:"query" default:"1"`
-    Size  int    `src:"query" default:"20"`
-    Sort  string `src:"query"`
-    Query string `src:"query"`  // 模糊搜索
+    Page  int    `json:"page" src:"query" default:"1"`
+    Size  int    `json:"size" src:"query" default:"20"`
+    Sort  string `json:"sort" src:"query"`
+    Query string `json:"query" src:"query"`  // 模糊搜索
 }
 func ListUsers(x *vigo.X, req *ListReq) ([]*User, error) {
     // ... 业务逻辑 ...

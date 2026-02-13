@@ -79,18 +79,18 @@ func TestFS(t *testing.T) {
 			"override.txt":   true,
 			"dir":            true,
 		}
-		
+
 		if len(entries) != len(expected) {
 			t.Errorf("ReadDir count = %d, want %d", len(entries), len(expected))
 		}
-		
+
 		for _, e := range entries {
 			if !expected[e.Name()] {
 				t.Errorf("Unexpected entry: %s", e.Name())
 			}
 		}
 	})
-	
+
 	// Test ReadDir for a path only in deeper layer
 	t.Run("ReadDir Deep", func(t *testing.T) {
 		// "deep" folder is only in mockFS2 (under assets/deep -> becomes deep)

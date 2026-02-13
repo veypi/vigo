@@ -60,11 +60,12 @@ type DocAction struct {
 }
 
 type DocParam struct {
-	Name     string `json:"name" yaml:"name"`
-	In       string `json:"in" yaml:"in"` // path, query, header
-	Type     string `json:"type" yaml:"type"`
-	Required bool   `json:"required" yaml:"required"`
-	Desc     string `json:"desc,omitempty" yaml:"desc,omitempty"`
+	Name     string      `json:"name" yaml:"name"`
+	In       string      `json:"in" yaml:"in"` // path, query, header
+	Type     string      `json:"type" yaml:"type"`
+	Required bool        `json:"required" yaml:"required"`
+	Desc     string      `json:"desc,omitempty" yaml:"desc,omitempty"`
+	Default  interface{} `json:"default,omitempty" yaml:"default,omitempty"`
 }
 
 type DocBody struct {
@@ -79,8 +80,9 @@ type DocField struct {
 	Type     string      `json:"type" yaml:"type"` // string, int, bool, number, object, array, file
 	Required bool        `json:"required" yaml:"required"`
 	Desc     string      `json:"desc,omitempty" yaml:"desc,omitempty"`
-	Item     *DocField   `json:"item,omitempty" yaml:"item,omitempty"`     // For arrays
-	Fields   []*DocField `json:"fields,omitempty" yaml:"fields,omitempty"` // For objects
+	Default  interface{} `json:"default,omitempty" yaml:"default,omitempty"` // for string, int, bool, number
+	Item     *DocField   `json:"item,omitempty" yaml:"item,omitempty"`       // For arrays
+	Fields   []*DocField `json:"fields,omitempty" yaml:"fields,omitempty"`   // For objects
 }
 
 // Implementation of Router interface methods
@@ -304,13 +306,23 @@ func parseDocArgs(t reflect.Type) ([]*DocParam, *DocBody) {
 
 			switch source {
 			case "path", "query", "header":
+				defaultVal := field.Tag.Get("default")
+				required := field.Type.Kind() != reflect.Ptr // Pointer = Optional
+				if defaultVal != "" {
+					required = false
+				}
+
 				p := &DocParam{
 					Name:     name,
 					In:       source,
 					Type:     getDocType(field.Type),
-					Required: field.Type.Kind() != reflect.Ptr, // Pointer = Optional
+					Required: required,
 					Desc:     desc,
 				}
+				if defaultVal != "" {
+					p.Default = defaultVal
+				}
+
 				if source == "path" && len(parts) > 1 {
 					p.Name = parts[1] // Use alias for path param
 				}
@@ -332,7 +344,12 @@ func parseDocArgs(t reflect.Type) ([]*DocParam, *DocBody) {
 					body.ContentType = "multipart/form-data"
 				}
 
-				body.Fields = append(body.Fields, generateDocField(field.Type, name, desc))
+				defaultStr := field.Tag.Get("default")
+				var def interface{}
+				if defaultStr != "" {
+					def = defaultStr
+				}
+				body.Fields = append(body.Fields, generateDocField(field.Type, name, desc, def))
 			}
 		}
 	}
@@ -353,7 +370,7 @@ func parseDocResponse(t reflect.Type) *DocBody {
 	}
 
 	if docType == "array" {
-		body.Item = generateDocField(t.Elem(), "", "")
+		body.Item = generateDocField(t.Elem(), "", "", nil)
 	} else if docType == "object" {
 		body.Fields = GenerateDocFields(t)
 	}
@@ -361,12 +378,17 @@ func parseDocResponse(t reflect.Type) *DocBody {
 	return body
 }
 
-func generateDocField(t reflect.Type, name string, desc string) *DocField {
+func generateDocField(t reflect.Type, name string, desc string, defaultVal interface{}) *DocField {
 	f := &DocField{
 		Name:     name,
 		Type:     getDocType(t),
 		Required: true, // Default to required unless ptr?
 		Desc:     desc,
+		Default:  defaultVal,
+	}
+
+	if defaultVal != nil {
+		f.Required = false
 	}
 
 	if t.Kind() == reflect.Ptr {
@@ -380,7 +402,7 @@ func generateDocField(t reflect.Type, name string, desc string) *DocField {
 	}
 
 	if f.Type == "array" {
-		f.Item = generateDocField(t.Elem(), "", "")
+		f.Item = generateDocField(t.Elem(), "", "", nil)
 	} else if f.Type == "object" {
 		f.Fields = GenerateDocFields(t)
 	}
@@ -429,7 +451,12 @@ func GenerateDocFields(t reflect.Type) []*DocField {
 				name = field.Name
 			}
 
-			fields = append(fields, generateDocField(field.Type, name, field.Tag.Get("desc")))
+			defaultStr := field.Tag.Get("default")
+			var def interface{}
+			if defaultStr != "" {
+				def = defaultStr
+			}
+			fields = append(fields, generateDocField(field.Type, name, field.Tag.Get("desc"), def))
 		}
 	}
 	processFields(t)

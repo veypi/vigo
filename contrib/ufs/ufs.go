@@ -1,9 +1,17 @@
 package ufs
 
 import (
+	"bytes"
 	"errors"
+	"io"
 	"io/fs"
+	"net/http"
 	"os"
+	"path"
+	"time"
+
+	"github.com/veypi/vigo"
+	"github.com/veypi/vigo/logv"
 )
 
 // FS implements a union file system that searches through layers in order.
@@ -190,4 +198,185 @@ func (f *FS) Stat(name string) (fs.FileInfo, error) {
 		return nil, firstNotExistErr
 	}
 	return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
+}
+
+// NewHandler returns a vigo handler that serves static files from the FS.
+// It expects a path parameter named "path" in the route (e.g., "/static/{path:*}").
+// If the path resolves to a directory, it returns a JSON list of the directory contents.
+func (f *FS) NewHandler() func(*vigo.X) {
+	return func(x *vigo.X) {
+		p := x.PathParams.Get("path")
+		if p == "" || p == "/" {
+			p = "."
+		} else if len(p) > 0 && p[0] == '/' {
+			p = p[1:]
+		}
+
+		file, err := f.Open(p)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) {
+				x.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if errors.Is(err, fs.ErrPermission) {
+				x.WriteHeader(http.StatusForbidden)
+				return
+			}
+			x.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		defer file.Close()
+
+		stat, err := file.Stat()
+		if err != nil {
+			x.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		if stat.IsDir() {
+			entries, err := f.ReadDir(p)
+			if err != nil {
+				x.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			type FileInfo struct {
+				Name string `json:"name"`
+				Dir  bool   `json:"dir"`
+				Size int64  `json:"size"`
+			}
+
+			list := make([]FileInfo, 0, len(entries))
+			for _, e := range entries {
+				info, err := e.Info()
+				size := int64(0)
+				if err == nil {
+					size = info.Size()
+				}
+				list = append(list, FileInfo{
+					Name: e.Name(),
+					Dir:  e.IsDir(),
+					Size: size,
+				})
+			}
+			x.JSON(list)
+			return
+		}
+
+		if rs, ok := file.(io.ReadSeeker); ok {
+			http.ServeContent(x.ResponseWriter(), x.Request, stat.Name(), stat.ModTime(), rs)
+			return
+		}
+		x.WriteHeader(http.StatusInternalServerError)
+	}
+}
+
+// NewHandlerWithDefaultFile returns a vigo handler with a default file fallback.
+// If the requested path is not found or is a directory, the default file is served.
+// The default file is loaded into memory during initialization.
+func (f *FS) NewHandlerWithDefaultFile(defaultFile string) func(*vigo.X) {
+	var defaultContent []byte
+	var defaultModTime time.Time
+	var defaultName string
+
+	df, err := f.Open(defaultFile)
+	if err != nil {
+		logv.Warn().Err(err).Msgf("default file %s not found", defaultFile)
+	} else {
+		stat, _ := df.Stat()
+		if stat != nil {
+			defaultModTime = stat.ModTime()
+			defaultName = stat.Name()
+		}
+		content, err := io.ReadAll(df)
+		df.Close()
+		if err != nil {
+			logv.Warn().Err(err).Msgf("failed to read default file %s", defaultFile)
+		} else {
+			defaultContent = content
+		}
+	}
+
+	return func(x *vigo.X) {
+		p := x.PathParams.Get("path")
+		if p == "" || p == "/" {
+			p = "."
+		} else if len(p) > 0 && p[0] == '/' {
+			p = p[1:]
+		}
+
+		file, err := f.Open(p)
+		if err != nil {
+			if errors.Is(err, fs.ErrNotExist) && defaultContent != nil {
+				// If path has extension, return 404
+				if path.Ext(p) != "" {
+					x.WriteHeader(http.StatusNotFound)
+					return
+				}
+				http.ServeContent(x.ResponseWriter(), x.Request, defaultName, defaultModTime, bytes.NewReader(defaultContent))
+				return
+			}
+			if errors.Is(err, fs.ErrNotExist) {
+				x.WriteHeader(http.StatusNotFound)
+				return
+			}
+			if errors.Is(err, fs.ErrPermission) {
+				x.WriteHeader(http.StatusForbidden)
+				return
+			}
+			x.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		defer file.Close()
+
+		stat, err := file.Stat()
+		if err != nil {
+			x.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+
+		if stat.IsDir() {
+			if defaultContent != nil {
+				// If path has extension, do not return default file.
+				// However, directories usually don't have extensions.
+				// If a directory happens to have an extension (e.g. /style.css/), we probably shouldn't serve default file if it looks like a file.
+				http.ServeContent(x.ResponseWriter(), x.Request, defaultName, defaultModTime, bytes.NewReader(defaultContent))
+				return
+			}
+
+			entries, err := f.ReadDir(p)
+			if err != nil {
+				x.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+
+			type FileInfo struct {
+				Name string `json:"name"`
+				Dir  bool   `json:"dir"`
+				Size int64  `json:"size"`
+			}
+
+			list := make([]FileInfo, 0, len(entries))
+			for _, e := range entries {
+				info, err := e.Info()
+				size := int64(0)
+				if err == nil {
+					size = info.Size()
+				}
+				list = append(list, FileInfo{
+					Name: e.Name(),
+					Dir:  e.IsDir(),
+					Size: size,
+				})
+			}
+			x.JSON(list)
+			return
+		}
+
+		if rs, ok := file.(io.ReadSeeker); ok {
+			http.ServeContent(x.ResponseWriter(), x.Request, stat.Name(), stat.ModTime(), rs)
+			return
+		}
+		x.WriteHeader(http.StatusInternalServerError)
+	}
 }

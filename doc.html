@@ -569,7 +569,7 @@
         <div style="margin-top: 20px; border-top: 1px solid var(--border); padding-top: 10px;">
           <div class="section-title">Response</div>
           <div id="reqResponseStatus" class="text-sm" style="margin-bottom: 5px;"></div>
-          <pre id="reqResponseBody" style="max-height: 200px; overflow: auto;">No request sent yet.</pre>
+          <pre id="reqResponseBody" style="max-height: 300px; overflow: auto;">No request sent yet.</pre>
         </div>
       </div>
       <div class="modal-footer">
@@ -626,7 +626,7 @@
           paramsHtml = `
                     <div class="section-title">Parameters</div>
                     <table class="params-table">
-                        <thead><tr><th>Name</th><th>In</th><th>Type</th><th>Required</th><th>Desc</th></tr></thead>
+                        <thead><tr><th>Name</th><th>In</th><th>Type</th><th>Required</th><th>Default</th><th>Desc</th></tr></thead>
                         <tbody>
                             ${route.params.map(p => `
                                 <tr>
@@ -634,6 +634,7 @@
                                     <td><span class="badge">${p.in}</span></td>
                                     <td><code>${p.type}</code></td>
                                     <td>${p.required ? '<span class="badge required">Yes</span>' : 'No'}</td>
+                                    <td>${p.default !== undefined && p.default !== null ? `<code>${p.default}</code>` : '-'}</td>
                                     <td>${p.desc || '-'}</td>
                                 </tr>
                             `).join('')}
@@ -649,7 +650,7 @@
             bodyHtml = `
                     <div class="section-title">Request Body (${route.body.content_type || 'application/json'})</div>
                     <table class="params-table">
-                        <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Desc</th></tr></thead>
+                        <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Default</th><th>Desc</th></tr></thead>
                         <tbody>
                             ${bodyContent}
                         </tbody>
@@ -737,6 +738,7 @@
                 <td>${name || (f.type === 'array' ? '<span class="text-light">[Root Array]</span>' : '')}</td>
                 <td><code>${f.type}</code></td>
                 ${showRequired ? `<td>${f.required ? '<span class="badge required">Yes</span>' : 'No'}</td>` : ''}
+                ${showRequired ? `<td>${f.default !== undefined && f.default !== null ? `<code>${f.default}</code>` : '-'}</td>` : ''}
                 <td>${f.desc || '-'}</td>
             </tr>`;
         if (f.fields) {
@@ -994,12 +996,12 @@
 
         statusEl.innerHTML = `<span style="font-weight:bold; color:${res.ok ? 'green' : 'red'}">${res.status} ${res.statusText}</span> - ${duration}ms`;
 
-        const contentType = res.headers.get('content-type');
-        if (contentType && contentType.includes('application/json')) {
-          const json = await res.json();
+        const text = await res.text();
+        try {
+          const json = JSON.parse(text);
           bodyEl.innerText = JSON.stringify(json, null, 2);
-        } else {
-          bodyEl.innerText = await res.text();
+        } catch (e) {
+          bodyEl.innerText = text;
         }
       } catch (e) {
         statusEl.innerText = 'Error';
