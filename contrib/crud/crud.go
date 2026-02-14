@@ -209,7 +209,7 @@ func (c *Controller[T]) get(x *vigo.X) (*T, error) {
 
 	id := x.PathParams.Get(c.idParam)
 	if id == "" {
-		return nil, vigo.ErrArgInvalid.WithArgs(c.idParam)
+		return nil, vigo.ErrInvalidArg.WithArgs(c.idParam)
 	}
 
 	var item T
@@ -248,7 +248,7 @@ func (c *Controller[T]) delete(x *vigo.X) (any, error) {
 
 	id := x.PathParams.Get(c.idParam)
 	if id == "" {
-		return nil, vigo.ErrArgInvalid.WithArgs(c.idParam)
+		return nil, vigo.ErrInvalidArg.WithArgs(c.idParam)
 	}
 
 	model := new(T)
@@ -266,7 +266,7 @@ func (c *Controller[T]) update(x *vigo.X) (*T, error) {
 
 	id := x.PathParams.Get(c.idParam)
 	if id == "" {
-		return nil, vigo.ErrArgInvalid.WithArgs(c.idParam)
+		return nil, vigo.ErrInvalidArg.WithArgs(c.idParam)
 	}
 
 	// Parse body manually to map to support partial updates

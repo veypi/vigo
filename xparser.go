@@ -155,7 +155,7 @@ func (x *X) Parse(target any) error {
 			// Empty body is not an error
 			return nil
 		} else if err != nil {
-			return ErrArgInvalid.WithArgs(err)
+			return ErrInvalidArg.WithArgs(err)
 		}
 		return nil
 	}
@@ -338,7 +338,7 @@ func setFieldValue(fieldValue reflect.Value, fieldName string, value any, found 
 			return nil
 		}
 		if !isPointer {
-			return ErrArgMissing.WithArgs(fieldName)
+			return ErrMissingArg.WithArgs(fieldName)
 		}
 		return nil
 	}

@@ -6,6 +6,7 @@
 package common
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 
@@ -36,10 +37,14 @@ func JsonErrorResponse(x *vigo.X, err error) error {
 			code, _ = strconv.Atoi(strconv.Itoa(code)[:3])
 		}
 		x.WriteHeader(code)
-		_, err := x.Write(fmt.Appendf([]byte{}, `{"code":%d,"message":"%s"}`, e.Code, e.Message))
+		resp := map[string]any{"code": e.Code, "message": e.Message}
+		b, _ := json.Marshal(resp)
+		_, err := x.Write(b)
 		return err
 	}
 	x.WriteHeader(code)
-	_, err = x.Write(fmt.Appendf([]byte{}, `{"code":%d,"message":"%s"}`, code, err.Error()))
+	resp := map[string]any{"code": code, "message": err.Error()}
+	b, _ := json.Marshal(resp)
+	_, err = x.Write(b)
 	return err
 }

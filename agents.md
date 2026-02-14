@@ -71,8 +71,13 @@ description: "Vigo 框架后端开发规范。当需要使用 Golang + Vigo 框�
 var Router = vigo.NewRouter()
 func init() {
     // 路由注册
+    // Use和After对该层级路由下所有方法和子路由都生效
+    Router.Use(PermCheck)
     Router.Get("/{id}", "获取用户详情", getUser)
+    // 写在注册函数里的中间件，只对该接口生效
     Router.Post("/login", vigo.SkipBefore, login)  // 跳过父级 Before
+    // 定义子路由
+    msgRouter := Router.SubRouter("msg")
 }
 ```
 
@@ -199,27 +204,62 @@ Router.After(common.JsonResponse, common.JsonErrorResponse)
 
 ## 7. 错误处理
 
+采用 5 位数字编码，前三位对应 HTTP 状态码，后两位为场景细分：
+
 ### 7.1 预定义错误
 
 ```go
-vigo.ErrNotFound                    // 404
-vigo.ErrNotAuthorized               // 401
-vigo.ErrForbidden                   // 403
-vigo.ErrArgInvalid.WithArgs("name") // 409
-vigo.ErrInternalServer              // 500
+// 4xx 客户端错误
+vigo.ErrBadRequest                    // 40000 - 通用请求错误
+vigo.ErrInvalidArg.WithArgs("name")   // 40001 - 参数无效
+vigo.ErrMissingArg.WithArgs("id")     // 40002 - 参数缺失
+vigo.ErrArgFormat                     // 40003 - 参数格式错误
+
+vigo.ErrUnauthorized                  // 40100 - 未登录/无token
+vigo.ErrTokenInvalid                  // 40101 - token无效
+vigo.ErrTokenExpired                  // 40102 - token过期
+vigo.ErrNoPermission                  // 40103 - 无操作权限
+vigo.ErrForbidden                     // 40300 - 禁止访问
+
+vigo.ErrNotFound                      // 40400 - 资源不存在
+vigo.ErrResourceNotFound.WithArgs("user") // 40401 - 指定资源不存在
+vigo.ErrEndpointNotFound              // 40402 - 接口不存在
+
+vigo.ErrConflict                      // 40900 - 资源冲突
+vigo.ErrAlreadyExists.WithArgs("email")   // 40901 - 资源已存在
+
+vigo.ErrTooManyRequests               // 42900 - 请求过于频繁
+
+// 5xx 服务端错误
+vigo.ErrInternalServer                // 50000 - 内部服务器错误
+vigo.ErrDatabase                      // 50001 - 数据库错误
+vigo.ErrCache                         // 50002 - 缓存错误
+vigo.ErrThirdParty                    // 50003 - 第三方服务错误
+
+vigo.ErrNotImplemented                // 50100 - 功能未实现
+vigo.ErrNotSupported                  // 50101 - 不支持的操作
+
+vigo.ErrServiceUnavailable            // 50300 - 服务不可用
 ```
 
-### 7.2 自定义错误
+### 7.2 错误使用方法
 
 ```go
-// 自定义错误
-return nil, vigo.NewError("积分不足").WithCode(400)
+// 基础使用
+return nil, vigo.ErrNotFound
+
+// 添加参数详情
+return nil, vigo.ErrInvalidArg.WithArgs("email格式不正确")
 
 // 包装底层错误
-return nil, vigo.NewError("数据库错误").WithError(err)
-```
+return nil, vigo.ErrDatabase.WithError(err)
 
----
+// 自定义消息
+return nil, vigo.ErrBadRequest.WithMessage("积分不足")
+
+// 自定义错误码
+return nil, vigo.NewError("业务错误").WithCode(40099)
+```
 
 ## 8. 数据库 (GORM)
 

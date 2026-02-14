@@ -349,7 +349,7 @@ func parseDocArgs(t reflect.Type) ([]*DocParam, *DocBody) {
 				if defaultStr != "" {
 					def = defaultStr
 				}
-				body.Fields = append(body.Fields, generateDocField(field.Type, name, desc, def))
+				body.Fields = append(body.Fields, generateDocField(field.Type, name, desc, def, nil))
 			}
 		}
 	}
@@ -370,7 +370,7 @@ func parseDocResponse(t reflect.Type) *DocBody {
 	}
 
 	if docType == "array" {
-		body.Item = generateDocField(t.Elem(), "", "", nil)
+		body.Item = generateDocField(t.Elem(), "", "", nil, nil)
 	} else if docType == "object" {
 		body.Fields = GenerateDocFields(t)
 	}
@@ -378,7 +378,7 @@ func parseDocResponse(t reflect.Type) *DocBody {
 	return body
 }
 
-func generateDocField(t reflect.Type, name string, desc string, defaultVal interface{}) *DocField {
+func generateDocField(t reflect.Type, name string, desc string, defaultVal interface{}, visited map[reflect.Type]bool) *DocField {
 	f := &DocField{
 		Name:     name,
 		Type:     getDocType(t),
@@ -401,22 +401,41 @@ func generateDocField(t reflect.Type, name string, desc string, defaultVal inter
 		return f
 	}
 
+	// Check for circular reference
+	if visited == nil {
+		visited = make(map[reflect.Type]bool)
+	}
+	if visited[t] {
+		return f
+	}
+	visited[t] = true
+
 	if f.Type == "array" {
-		f.Item = generateDocField(t.Elem(), "", "", nil)
+		f.Item = generateDocField(t.Elem(), "", "", nil, visited)
 	} else if f.Type == "object" {
-		f.Fields = GenerateDocFields(t)
+		f.Fields = generateDocFieldsWithVisited(t, visited)
 	}
 
 	return f
 }
 
 func GenerateDocFields(t reflect.Type) []*DocField {
+	return generateDocFieldsWithVisited(t, make(map[reflect.Type]bool))
+}
+
+func generateDocFieldsWithVisited(t reflect.Type, visited map[reflect.Type]bool) []*DocField {
 	if t.Kind() == reflect.Ptr {
 		t = t.Elem()
 	}
 	if t.Kind() != reflect.Struct {
 		return nil
 	}
+
+	// Check for circular reference
+	if visited[t] {
+		return nil
+	}
+	visited[t] = true
 
 	var fields []*DocField
 	// Helper to process fields recursively for embedded structs
@@ -456,7 +475,7 @@ func GenerateDocFields(t reflect.Type) []*DocField {
 			if defaultStr != "" {
 				def = defaultStr
 			}
-			fields = append(fields, generateDocField(field.Type, name, field.Tag.Get("desc"), def))
+			fields = append(fields, generateDocField(field.Type, name, field.Tag.Get("desc"), def, visited))
 		}
 	}
 	processFields(t)

@@ -226,7 +226,7 @@ func TestParseEmptyVsMissing(t *testing.T) {
 				t.Errorf("%s: Expected error but got nil", tt.name)
 			} else {
 				// Check if error contains field name
-				// We expect ErrArgMissing or similar, usually containing the field name
+				// We expect ErrMissingArg or similar, usually containing the field name
 				if !strings.Contains(err.Error(), tt.expectErr) {
 					t.Errorf("%s: Expected error to contain '%s', got '%v'", tt.name, tt.expectErr, err)
 				}
