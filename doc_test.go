@@ -189,6 +189,35 @@ func TestParseDocResponse(t *testing.T) {
 	}
 }
 
+// 测试循环引用不会导致死循环
+type DocNode struct {
+	ID       string     `json:"id"`
+	Children []*DocNode `json:"children"`
+	Parent   *DocNode   `json:"parent"`
+}
+
+func TestParseDocResponse_Circular(t *testing.T) {
+	// 测试自引用结构体不会导致死循环
+	respType := reflect.TypeOf(DocNode{})
+	body := parseDocResponse(respType)
+	if body.Type != "object" {
+		t.Errorf("Expected object type, got %s", body.Type)
+	}
+
+	// 测试自引用数组
+	respType = reflect.TypeOf([]*DocNode{})
+	body = parseDocResponse(respType)
+	if body.Type != "array" {
+		t.Errorf("Expected array type, got %s", body.Type)
+	}
+	if body.Item == nil {
+		t.Fatal("Expected Item for array")
+	}
+	if body.Item.Type != "object" {
+		t.Errorf("Expected Item type object, got %s", body.Item.Type)
+	}
+}
+
 func TestDocIntegration(t *testing.T) {
 	r := NewRouter()
 

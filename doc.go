@@ -12,12 +12,14 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-const DefaultApiDesc = `API documentation
-Query parameters for Api JSON Doc endpoint:
-  - prefix=/user&method=GET  Filter by path prefix and method
-  - query=list               Fuzzy search by path
-  - mode=full                Show full details (params, body, response)
-  - mode=debug               Show debug info (handlers, file location)`
+const DefaultApiDesc = `API Documentation
+
+Query Parameters:
+  prefix    strict prefix match, e.g. prefix=/user
+  query     fuzzy path search, e.g. query=list
+  path      exact path match, e.g. path=/user/123
+  method    HTTP method filter, e.g. method=GET
+  mode      response mode: simple(default)|full|debug`
 
 // Doc defines a concise API documentation structure
 type Doc struct {
@@ -89,6 +91,7 @@ type DocField struct {
 type DocJsonRequest struct {
 	Prefix *string `src:"query" json:"prefix" desc:"strict prefix match"`
 	Query  *string `src:"query" json:"query" desc:"fuzzy path match"`
+	Path   *string `src:"query" json:"path" desc:"exact path match"`
 	Method *string `src:"query" json:"method" desc:"filter by method"`
 	Mode   *string `src:"query" json:"mode" desc:"mode: simple(default)|full|debug"`
 }
@@ -99,13 +102,16 @@ func (app *Application) EnableApiDoc() {
 			res := app.Router().Doc()
 
 			// Filter
-			if arg.Prefix != nil || arg.Method != nil || arg.Query != nil {
+			if arg.Prefix != nil || arg.Method != nil || arg.Query != nil || arg.Path != nil {
 				filtered := make([]*DocRoute, 0, len(res.Routes))
 				for _, r := range res.Routes {
 					if arg.Prefix != nil && !strings.HasPrefix(r.Path, *arg.Prefix) {
 						continue
 					}
 					if arg.Query != nil && !strings.Contains(r.Path, *arg.Query) {
+						continue
+					}
+					if arg.Path != nil && r.Path != *arg.Path {
 						continue
 					}
 					if arg.Method != nil && !strings.EqualFold(r.Method, *arg.Method) {
@@ -405,10 +411,6 @@ func generateDocField(t reflect.Type, name string, desc string, defaultVal inter
 	if visited == nil {
 		visited = make(map[reflect.Type]bool)
 	}
-	if visited[t] {
-		return f
-	}
-	visited[t] = true
 
 	if f.Type == "array" {
 		f.Item = generateDocField(t.Elem(), "", "", nil, visited)
