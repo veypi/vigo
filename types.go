@@ -11,19 +11,17 @@ import (
 	"net/http"
 	"reflect"
 	"unsafe"
+
+	"github.com/veypi/vigo/contrib/event"
 )
 
 //go:noescape
 //go:linkname nanotime runtime.nanotime
 func nanotime() int64
 
-type (
-	// map
-	M = map[string]any
-	// slice
-	S          = []any
-	Middleware func(x *X) error
-)
+var Event = event.Default
+
+type Middleware func(x *X) error
 
 type FuncStandard[T, U any] func(*X, T) (U, error)
 

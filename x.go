@@ -9,6 +9,7 @@ package vigo
 
 import (
 	"context"
+	"fmt"
 	"net"
 	"net/http"
 	"reflect"
@@ -69,6 +70,16 @@ func (x *X) Skip(counts ...uint) {
 }
 
 func (x *X) Next() {
+	defer func() {
+		if e := recover(); e != nil {
+			switch e := e.(type) {
+			case error:
+				x.handleErr(e)
+			default:
+				x.handleErr(fmt.Errorf("%v", e))
+			}
+		}
+	}()
 	for {
 		// args[0] vaild
 		var err error
