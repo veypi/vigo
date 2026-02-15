@@ -1,345 +1,253 @@
 ---
 name: vigo-backend
-description: "Vigo 框架后端开发规范。当需要使用 Golang + Vigo 框架开发 RESTful API 时调用此技能，包含路由定义、参数解析、中间件、错误处理、数据库操作等完整规范。"
+description: "Vigo Framework Backend Development Standards. Invoke this skill when developing RESTful APIs using Golang + Vigo Framework. It includes specifications for routing, parameter parsing, middleware, error handling, database operations, and more."
 ---
 
-# Vigo 后端开发规范
+# Vigo Backend Development Standards
 
-## 1. 核心原则
+## 1. Core Principles: Onion Architecture
 
-### 1.1 洋葱模型
+Request processing pipeline: `Before` → `Handler` → `After`
 
-请求处理流水线：`Before` → `Handler` → `After`
+| Stage   | Responsibility                                      | Description                                      |
+| ------- | --------------------------------------------------- | ------------------------------------------------ |
+| Before  | Authentication, preprocessing, context injection    | Executed upon entry. **Parent hooks run before child hooks.** |
+| Handler | Business logic                                      | Returns data object, **does not write response directly.** |
+| After   | Response formatting, logging, cleanup               | Executed upon exit. **Parent hooks run after child hooks.** |
 
-| 阶段    | 职责                         | 说明                         |
-| ------- | ---------------------------- | ---------------------------- |
-| Before  | 鉴权、参数预处理、上下文注入 | 进入时执行                   |
-| Handler | 业务逻辑                     | 返回数据对象，不直接写入响应 |
-| After   | 响应格式化、日志记录、清理   | 离开时执行                   |
-
-### 1.2 层级作用域
-
-父路由 `Before` 先于子路由执行，父路由 `After` 后于子路由执行。
-
-### 1.3 强类型优先
-
-使用泛型 Handler `func(*vigo.X, *Req) (Resp, error)`，框架自动解析参数。
+**Key Rule**: Use generic Handlers `func(*vigo.X, *Req) (Resp, error)`. The framework automatically binds parameters and generates documentation.
 
 ---
 
-## 2. 项目结构
+## 2. Project Structure
 
-```
+```text
 /
 ├── api/
-│   ├── init.go          # API根路由，注册全局中间件
-│   └── {resource}/
-│       ├── init.go      # 资源路由
-│       ├── get.go       # 查询单个资源
-│       ├── list.go      # 列表查询
-│       ├── create.go    # 创建资源
-│       ├── patch.go     # 更新资源
-│       └── del.go       # 删除资源
-├── models/              # GORM 数据模型
-│   ├── init.go
-│   └── {resource}.go
-├── cfg/                 # 配置与基础设施
-│   ├── config.go
-│   └── db.go
-├── libs/                # 业务通用逻辑库
-├── cli/main.go          # 程序入口
-└── init.go              # 项目根路由集成
+│   ├── init.go          # API root router (registers global middleware)
+│   └── {resource}/      # Resource module (e.g., user, order)
+│       ├── init.go      # Resource router & sub-router definitions
+│       ├── {action}.go  # Handlers (get.go, create.go, list.go)
+├── models/              # GORM Data Models
+│   ├── init.go          # Model registration (Models.Add)
+│   └── {resource}.go    # Struct definitions
+├── cfg/                 # Configuration & Infrastructure (DB, Redis)
+├── libs/                # Common Business Logic Libraries
+├── cli/main.go          # Application Entry Point
+└── init.go              # Project Root Router Integration
 ```
 
 ---
 
-## 3. 路由系统
+## 3. Routing System
 
-### 3.1 路由语法
+**Syntax**: `/{param}` (Named), `/{param:[0-9]+}` (Regex), `/*` (Wildcard), `/**` (Recursive)
 
-| 语法                 | 说明     | 示例               |
-| -------------------- | -------- | ------------------ |
-| `/{param}`           | 命名参数 | `/users/{id}`      |
-| `/{param:[0-9]+}`    | 正则约束 | `/{id:[0-9]+}`     |
-| `/*`                 | 单段通配 | `/files/*`         |
-| `/**` 或 `/{path:*}` | 递归通配 | `/static/{path:*}` |
-
-### 3.2 路由注册
-
+**Registration Example**:
 ```go
 // api/user/init.go
 var Router = vigo.NewRouter()
+
 func init() {
-    // 路由注册
-    // Use和After对该层级路由下所有方法和子路由都生效
-    Router.Use(PermCheck)
-    Router.Get("/{id}", "获取用户详情", getUser)
-    // 写在注册函数里的中间件，只对该接口生效
-    Router.Post("/login", vigo.SkipBefore, login)  // 跳过父级 Before
-    // 定义子路由
-    msgRouter := Router.SubRouter("msg")
+    Router.Use(PermCheck)                           // Middleware
+    Router.Get("/{id}", "Get User", getUser)        // Standard
+    Router.Post("/login", vigo.SkipBefore, login)   // Skip Middleware
+    
+    msgRouter := Router.SubRouter("msg")            // Sub-router
+    msgRouter.Get("/", "List Messages", listMessages)
 }
-```
 
-### 3.3 子路由挂载
-
-```go
-// api/init.go
-import "MyProject/api/user"
-
+// api/init.go (Mounting)
 func init() {
-    // 中间件注册
-    Router.Use(middleware.AuthRequired)     // Before
-    Router.After(common.JsonResponse)       // After
+    Router.Use(middleware.AuthRequired)
+    Router.After(common.JsonResponse)
     Router.Extend("/users", user.Router)
 }
 ```
 
 ---
 
-## 4. 参数解析
+## 4. Parameter Parsing
 
-### 4.1 标签语法
+**Source**: `path`, `query`, `header`, `json`, `form`.
+**Rule**: Non-pointer fields are **required** by default. Use pointer or `default` tag for optional.
 
-格式: `src:"source[@alias]"`
-
-| Source   | 说明         | 必填规则             |
-| -------- | ------------ | -------------------- |
-| `path`   | 路径参数     | 非指针必填，指针可选 |
-| `query`  | URL 查询参数 | 同左                 |
-| `header` | 请求头       | 同左                 |
-| `json`   | JSON Body    | 同左                 |
-| `form`   | 表单数据     | 同左                 |
-
-**必填规则**：非指针类型默认必填，指针类型可选。
-
-**`default` 标签**：设置默认值，仅对非指针类型生效，对 `json`/`form` 源无效。
-
-### 4.2 完整示例
-
+**Example**:
 ```go
 type UserUpdateReq struct {
-    // 路径参数: /users/{user_id}
-    UserID  string `src:"path@user_id" desc:"用户ID"`
-
-    // Header 参数
-    TraceID string `src:"header@X-Trace-ID" desc:"链路追踪ID"`
-
-    // Query 参数 (指针表示可选, 或搭配 default 使非指针变为可选)
-    Verbose bool   `src:"query" default:"false" desc:"详细模式"`
-
-    // JSON Body 参数
-    Name    string `json:"name" src:"json" desc:"用户名"`
-    Email   string `json:"email" src:"json" desc:"邮箱"`
-
-    // 文件上传
-    Avatar  *multipart.FileHeader   `src:"form" desc:"头像"`
-    Images  []*multipart.FileHeader `src:"form" desc:"图片列表"`
+    UserID  string  `src:"path@user_id"`         // Path (Required)
+    TraceID string  `src:"header@X-Trace-ID"`    // Header (Required)
+    Verbose bool    `src:"query" default:"false"`// Query (Optional + Default)
+    Name    string  `json:"name" src:"json"`     // Body (Required)
+    Email   *string `json:"email" src:"json"`    // Body (Optional)
+    Avatar  *multipart.FileHeader `src:"form"`   // File
 }
 ```
 
 ---
 
-## 5. Context (\*vigo.X) 方法
+## 5. Context (`*vigo.X`) Methods
 
-| 方法                    | 说明                  |
-| ----------------------- | --------------------- |
-| `x.Next()`              | 执行下一个 Handler    |
-| `x.Stop()`              | 停止执行后续 Handler  |
-| `x.Skip(n)`             | 跳过后续 n 个 Handler |
-| `x.Set(key, val)`       | 设置上下文变量        |
-| `x.Get(key)`            | 获取上下文变量        |
-| `x.JSON(data)`          | 发送 JSON 响应        |
-| `x.WriteHeader(code)`   | 发送状态码            |
-| `x.GetRemoteIP()`       | 获取客户端 IP         |
-| `x.PathParams.Get(key)` | 获取路径参数          |
+- **Flow**: `Next()`, `Stop()`, `Skip(n)`
+- **Data**: `Set(k, v)`, `Get(k)`, `PathParams.Get(k)`
+- **Resp**: `JSON(data)`, `WriteHeader(code)`
 
 ---
 
-## 6. Handler 与中间件
+## 6. Handlers & Middleware
 
-### 6.1 泛型 Handler (推荐)
-
+### 6.1 Generic Handler
 ```go
-// 框架自动解析参数、生成文档
-func CreateUser(x *vigo.X, req *CreateReq) (*User, error) {
-    // 业务逻辑
-    return newUser, nil
-}
-
-// List 请求参数
 type ListReq struct {
-    Page  int    `json:"page" src:"query" default:"1"`
-    Size  int    `json:"size" src:"query" default:"20"`
-    Sort  string `json:"sort" src:"query"`
-    Query string `json:"query" src:"query" desc:"模糊搜索"`
+    Page int    `json:"page" src:"query" default:"1"`
+    Size int    `json:"size" src:"query" default:"20"`
+    Sort *string `json:"sort" src:"query" desc:"Sort field:'name desc'"`
+    Query *string `json:"query" src:"query" desc:"Search query"`
+}
+type ListResp struct {
+    Total int64 `json:"total"`
+    Items []*User `json:"items"`
 }
 
-func ListUsers(x *vigo.X, req *ListReq) ([]*User, error) {
-    // 业务逻辑
+func ListUsers(x *vigo.X, req *ListReq) (*ListResp, error) {
+    // Logic...
     return users, nil
 }
 ```
 
-### 6.2 中间件示例
-
+### 6.2 Middleware
 ```go
-// Before: 鉴权
+// Before: Auth
 func AuthMiddleware(x *vigo.X) error {
-    token := x.Request.Header.Get("Authorization")
-    if token == "" {
-        return vigo.NewError("Unauthorized").WithCode(401)
+    if x.Request.Header.Get("Authorization") == "" {
+        return vigo.ErrUnauthorized // 40100
     }
     x.Set("user_id", "123")
     return nil
 }
 
-// After: 标准响应处理
-import "github.com/veypi/vigo/contrib/common"
-
+// After: Response
 Router.After(common.JsonResponse, common.JsonErrorResponse)
 ```
 
----
+## 7. Error Handling
+**Format**: `3-digit Status` + `2-digit Scenario` (e.g., `400` + `01` = `40001`).
+**Common Errors**: `vigo.ErrBadRequest`, `vigo.ErrInvalidArg`, `vigo.ErrMissingArg`, `vigo.ErrArgFormat`, `vigo.ErrUnauthorized`, `vigo.ErrTokenInvalid`, `vigo.ErrTokenExpired`, `vigo.ErrNoPermission`, `vigo.ErrForbidden`, `vigo.ErrNotFound`, `vigo.ErrResourceNotFound`, `vigo.ErrEndpointNotFound`, `vigo.ErrConflict`, `vigo.ErrAlreadyExists`, `vigo.ErrTooManyRequests`, `vigo.ErrInternalServer`, `vigo.ErrDatabase`, `vigo.ErrCache`, `vigo.ErrThirdParty`, `vigo.ErrNotImplemented`, `vigo.ErrNotSupported`, `vigo.ErrServiceUnavailable`.
 
-## 7. 错误处理
-
-采用 5 位数字编码，前三位对应 HTTP 状态码，后两位为场景细分：
-
-### 7.1 预定义错误
-
+**Usage Patterns**:
 ```go
-// 4xx 客户端错误
-vigo.ErrBadRequest                    // 40000 - 通用请求错误
-vigo.ErrInvalidArg.WithArgs("name")   // 40001 - 参数无效
-vigo.ErrMissingArg.WithArgs("id")     // 40002 - 参数缺失
-vigo.ErrArgFormat                     // 40003 - 参数格式错误
-
-vigo.ErrUnauthorized                  // 40100 - 未登录/无token
-vigo.ErrTokenInvalid                  // 40101 - token无效
-vigo.ErrTokenExpired                  // 40102 - token过期
-vigo.ErrNoPermission                  // 40103 - 无操作权限
-vigo.ErrForbidden                     // 40300 - 禁止访问
-
-vigo.ErrNotFound                      // 40400 - 资源不存在
-vigo.ErrResourceNotFound.WithArgs("user") // 40401 - 指定资源不存在
-vigo.ErrEndpointNotFound              // 40402 - 接口不存在
-
-vigo.ErrConflict                      // 40900 - 资源冲突
-vigo.ErrAlreadyExists.WithArgs("email")   // 40901 - 资源已存在
-
-vigo.ErrTooManyRequests               // 42900 - 请求过于频繁
-
-// 5xx 服务端错误
-vigo.ErrInternalServer                // 50000 - 内部服务器错误
-vigo.ErrDatabase                      // 50001 - 数据库错误
-vigo.ErrCache                         // 50002 - 缓存错误
-vigo.ErrThirdParty                    // 50003 - 第三方服务错误
-
-vigo.ErrNotImplemented                // 50100 - 功能未实现
-vigo.ErrNotSupported                  // 50101 - 不支持的操作
-
-vigo.ErrServiceUnavailable            // 50300 - 服务不可用
+return nil, vigo.ErrNotFound                                  // Simple
+return nil, vigo.ErrInvalidArg.WithArgs("email")              // With Args
+return nil, vigo.ErrDatabase.WithError(err)                   // Wrap Error
+return nil, vigo.NewError("Balance Low").WithCode(40099)      // Custom
 ```
 
-### 7.2 错误使用方法
+## 8. Database (GORM)
 
+### 8.1 Model Definition
 ```go
-// 基础使用
-return nil, vigo.ErrNotFound
-
-// 添加参数详情
-return nil, vigo.ErrInvalidArg.WithArgs("email格式不正确")
-
-// 包装底层错误
-return nil, vigo.ErrDatabase.WithError(err)
-
-// 自定义消息
-return nil, vigo.ErrBadRequest.WithMessage("积分不足")
-
-// 自定义错误码
-return nil, vigo.NewError("业务错误").WithCode(40099)
-```
-
-## 8. 数据库 (GORM)
-
-### 8.1 基础模型
-
-```go
-// 使用 vigo.Model，包含 UUID 主键和时间戳
 type User struct {
-    vigo.Model
+    vigo.Model // Includes: ID (UUID), CreatedAt, UpdatedAt, DeletedAt
     Name  string `json:"name"`
     Email string `json:"email"`
 }
 ```
 
-### 8.2 常用操作
-
+### 8.2 Registration & Migration
 ```go
-// 获取 DB 实例
-cfg.DB()
+// models/init.go
+var AllModels = &vigo.ModelList{}
+func init() {
+    Models.Add(&User{})
+}
+// cli/main.go
+models.Models.AutoMigrate(db)
+```
 
-// 查询
+### 8.3 Common Operations
+```go
+// Query by ID
 var user models.User
 if err := cfg.DB().Where("id = ?", req.ID).First(&user).Error; err != nil {
     if errors.Is(err, gorm.ErrRecordNotFound) {
         return nil, vigo.ErrNotFound
     }
-    return nil, vigo.NewError("系统错误").WithError(err)
+    return nil, vigo.ErrDatabase.WithError(err)
 }
-```
-
-### 8.3 模型管理
-
-```go
-// models/init.go
-var Models = &vigo.ModelList{}
-
-func init() {
-    Models.Add(&User{})
-    Models.Add(&Order{})
-}
-
-// cli/main.go
-models.Models.AutoMigrate(db)
 ```
 
 ---
 
-## 9. 常用库
+## 9. Contrib Libraries
 
-### 9.1 标准响应
-
+### 9.1 Standard Response
 ```go
 import "github.com/veypi/vigo/contrib/common"
-
+// Registers standard JSON success/error formatters
 Router.After(common.JsonResponse, common.JsonErrorResponse)
 ```
 
-### 9.2 AES 加密
+### 9.2 vigo Event (Task Scheduler)
+**Features**: Local/Distributed, Periodic/Scheduled, One-time/Daemon.
 
 ```go
-import "github.com/veypi/vigo/contrib/config"
+import "github.com/veypi/vigo/contrib/event"
 
-key := config.Key("your-secret-key")
-encrypted, err := key.Encrypt("data")
-decrypted, err := key.Decrypt(encrypted)
+// 1. Setup Event
+// cli/main.go
+event.Start()
+// 2. Periodic Task
+event.Add("xxx.periodic", func() error , event.Every(10*time.Second))
+// 3. One-time & Dependency (Before/After invalid for Every/At)
+event.Add("xxx.init.db", func() error {  Models.AutoMigrate(db)/db.Save/.... })
+event.Add("xxx.task_B", funcB, event.After("xxx.init.db")) // B runs after init.db
+event.Add("xxx.task_C", funcC, event.Before("xxx.init.db"))// C runs before init.db
 ```
 
-### 9.3 Redis
-
+### 9.3 vigo app
 ```go
+// define cfg options
+// cfg/config.go
 import "github.com/veypi/vigo/contrib/config"
-
-// 内存模式 (测试用)
-redis := &config.Redis{Addr: "memory"}
-
-// 真实 Redis
-redis := &config.Redis{
-    Addr:     "localhost:6379",
-    Password: "password",
-    DB:       0,
+type Options struct {
+    selfOption string 
+    DB config.Database  // .Type .DSN
+    Redis  config.Redis    `json:"redis"` // .Addr .Password .DB
+    Key config.Key    `json:"key"` // string key.Encrypt("data"), key.Decrypt(encrypted)
+    OtherAppCfg OtherAppConfig `json:"other_app_cfg"` // other app config
 }
-client := redis.Client()
+var Config *Options = &Options{}
+var DB = Config.DB.Client // cfg.DB() => GORM DB Client
+var Redis = Config.Redis.Client // cfg.Redis() => redis client
+
+// start app
+// cli/main.go
+import "github.com/veypi/vigo/flags"
+var cliOpts = &struct {
+    Host string `json:"host" default:"0.0.0.0"`
+    Port int    `json:"port" short:"p" default:"8080"`
+    *cfg.Options
+}{
+    Options: cfg.Config, // Bind Global Config
+}
+// Auto-adds: -h (help), -f (config file), -l (log level)
+var cmd = flags.New("app_name", "description", cliOpts)
+func main() {
+    cmd.Command = runWeb
+    _ = cmd.Run()
+}
+func runWeb() error {
+    // Start Vigo
+    server, _ := vigo.New(vigo.WithHost(cliOpts.Host), vigo.WithPort(cliOpts.Port))
+    server.SetRouter(app.Router) // init.go.Router
+    return server.Run()
+}
+// define root router
+// init.go
+var Router = vigo.NewRouter()
+var _ = Router.Extend("api", api.Router) // my app api router: /api/** 
+var _ = Router.Extend("otherApp", otherApp.Router) // other app router: /otherApp/**
+var _ = vhtml.WrapUI(Router, uifs) // static files: /**
 ```
+
+
