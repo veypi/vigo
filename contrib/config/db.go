@@ -47,3 +47,7 @@ func (d *Database) Client() *gorm.DB {
 	}
 	return d.client
 }
+
+func (d *Database) SetClient(db *gorm.DB) {
+	d.client = db
+}

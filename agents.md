@@ -9,11 +9,11 @@ description: "Vigo Framework Backend Development Standards. Invoke this skill wh
 
 Request processing pipeline: `Before` → `Handler` → `After`
 
-| Stage   | Responsibility                                      | Description                                      |
-| ------- | --------------------------------------------------- | ------------------------------------------------ |
-| Before  | Authentication, preprocessing, context injection    | Executed upon entry. **Parent hooks run before child hooks.** |
-| Handler | Business logic                                      | Returns data object, **does not write response directly.** |
-| After   | Response formatting, logging, cleanup               | Executed upon exit. **Parent hooks run after child hooks.** |
+| Stage   | Responsibility                                   | Description                                                   |
+| ------- | ------------------------------------------------ | ------------------------------------------------------------- |
+| Before  | Authentication, preprocessing, context injection | Executed upon entry. **Parent hooks run before child hooks.** |
+| Handler | Business logic                                   | Returns data object, **does not write response directly.**    |
+| After   | Response formatting, logging, cleanup            | Executed upon exit. **Parent hooks run after child hooks.**   |
 
 **Key Rule**: Use generic Handlers `func(*vigo.X, *Req) (Resp, error)`. The framework automatically binds parameters and generates documentation.
 
@@ -26,7 +26,7 @@ Request processing pipeline: `Before` → `Handler` → `After`
 ├── api/
 │   ├── init.go          # API root router (registers global middleware)
 │   └── {resource}/      # Resource module (e.g., user, order)
-│       ├── init.go      # Resource router & sub-router definitions
+│       ├── init.go      # Resource router & sub-router definitions & register router
 │       ├── {action}.go  # Handlers (get.go, create.go, list.go)
 ├── models/              # GORM Data Models
 │   ├── init.go          # Model registration (Models.Add)
@@ -44,6 +44,7 @@ Request processing pipeline: `Before` → `Handler` → `After`
 **Syntax**: `/{param}` (Named), `/{param:[0-9]+}` (Regex), `/*` (Wildcard), `/**` (Recursive)
 
 **Registration Example**:
+
 ```go
 // api/user/init.go
 var Router = vigo.NewRouter()
@@ -52,7 +53,8 @@ func init() {
     Router.Use(PermCheck)                           // Middleware
     Router.Get("/{id}", "Get User", getUser)        // Standard
     Router.Post("/login", vigo.SkipBefore, login)   // Skip Middleware
-    
+    Router.Post("/fs",customwrite, vigo.Stop)       // Stop Middleware
+
     msgRouter := Router.SubRouter("msg")            // Sub-router
     msgRouter.Get("/", "List Messages", listMessages)
 }
@@ -73,6 +75,7 @@ func init() {
 **Rule**: Non-pointer fields are **required** by default. Use pointer or `default` tag for optional.
 
 **Example**:
+
 ```go
 type UserUpdateReq struct {
     UserID  string  `src:"path@user_id"`         // Path (Required)
@@ -97,6 +100,7 @@ type UserUpdateReq struct {
 ## 6. Handlers & Middleware
 
 ### 6.1 Generic Handler
+
 ```go
 type ListReq struct {
     Page int    `json:"page" src:"query" default:"1"`
@@ -116,6 +120,7 @@ func ListUsers(x *vigo.X, req *ListReq) (*ListResp, error) {
 ```
 
 ### 6.2 Middleware
+
 ```go
 // Before: Auth
 func AuthMiddleware(x *vigo.X) error {
@@ -131,10 +136,12 @@ Router.After(common.JsonResponse, common.JsonErrorResponse)
 ```
 
 ## 7. Error Handling
+
 **Format**: `3-digit Status` + `2-digit Scenario` (e.g., `400` + `01` = `40001`).
 **Common Errors**: `vigo.ErrBadRequest`, `vigo.ErrInvalidArg`, `vigo.ErrMissingArg`, `vigo.ErrArgFormat`, `vigo.ErrUnauthorized`, `vigo.ErrTokenInvalid`, `vigo.ErrTokenExpired`, `vigo.ErrNoPermission`, `vigo.ErrForbidden`, `vigo.ErrNotFound`, `vigo.ErrResourceNotFound`, `vigo.ErrEndpointNotFound`, `vigo.ErrConflict`, `vigo.ErrAlreadyExists`, `vigo.ErrTooManyRequests`, `vigo.ErrInternalServer`, `vigo.ErrDatabase`, `vigo.ErrCache`, `vigo.ErrThirdParty`, `vigo.ErrNotImplemented`, `vigo.ErrNotSupported`, `vigo.ErrServiceUnavailable`.
 
 **Usage Patterns**:
+
 ```go
 return nil, vigo.ErrNotFound                                  // Simple
 return nil, vigo.ErrInvalidArg.WithArgs("email")              // With Args
@@ -145,6 +152,7 @@ return nil, vigo.NewError("Balance Low").WithCode(40099)      // Custom
 ## 8. Database (GORM)
 
 ### 8.1 Model Definition
+
 ```go
 type User struct {
     vigo.Model // Includes: ID (UUID), CreatedAt, UpdatedAt, DeletedAt
@@ -154,6 +162,7 @@ type User struct {
 ```
 
 ### 8.2 Registration & Migration
+
 ```go
 // models/init.go
 var AllModels = &vigo.ModelList{}
@@ -165,6 +174,7 @@ models.Models.AutoMigrate(db)
 ```
 
 ### 8.3 Common Operations
+
 ```go
 // Query by ID
 var user models.User
@@ -181,6 +191,7 @@ if err := cfg.DB().Where("id = ?", req.ID).First(&user).Error; err != nil {
 ## 9. Contrib Libraries
 
 ### 9.1 Standard Response
+
 ```go
 import "github.com/veypi/vigo/contrib/common"
 // Registers standard JSON success/error formatters
@@ -188,6 +199,7 @@ Router.After(common.JsonResponse, common.JsonErrorResponse)
 ```
 
 ### 9.2 vigo Event (Task Scheduler)
+
 **Features**: Local/Distributed, Periodic/Scheduled, One-time/Daemon.
 
 ```go
@@ -205,12 +217,13 @@ event.Add("xxx.task_C", funcC, event.Before("xxx.init.db"))// C runs before init
 ```
 
 ### 9.3 vigo app
+
 ```go
 // define cfg options
 // cfg/config.go
 import "github.com/veypi/vigo/contrib/config"
 type Options struct {
-    selfOption string 
+    selfOption string
     DB config.Database  // .Type .DSN
     Redis  config.Redis    `json:"redis"` // .Addr .Password .DB
     Key config.Key    `json:"key"` // string key.Encrypt("data"), key.Decrypt(encrypted)
@@ -245,9 +258,7 @@ func runWeb() error {
 // define root router
 // init.go
 var Router = vigo.NewRouter()
-var _ = Router.Extend("api", api.Router) // my app api router: /api/** 
+var _ = Router.Extend("api", api.Router) // my app api router: /api/**
 var _ = Router.Extend("otherApp", otherApp.Router) // other app router: /otherApp/**
 var _ = vhtml.WrapUI(Router, uifs) // static files: /**
 ```
-
-
