@@ -1,8 +1,11 @@
 package cache
 
 import (
+	"context"
 	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // GetterFunc 定义获取对象的函数类型（泛型）
@@ -21,6 +24,9 @@ type Cache[T any] struct {
 	mutex      sync.RWMutex
 	defaultTTL time.Duration
 	getter     GetterFunc[T]
+	ctx        context.Context
+	cancel     context.CancelFunc
+	sf         singleflight.Group
 }
 
 // NewCache 创建新的缓存实例，在构建时确定获取函数和类型
@@ -29,10 +35,13 @@ func NewCache[T any](defaultTTL time.Duration, getter GetterFunc[T]) *Cache[T] {
 		panic("getter function cannot be nil")
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
 	cache := &Cache[T]{
 		data:       make(map[string]*CacheItem[T]),
 		defaultTTL: defaultTTL,
 		getter:     getter,
+		ctx:        ctx,
+		cancel:     cancel,
 	}
 
 	// 启动后台清理协程
@@ -55,12 +64,36 @@ func (c *Cache[T]) Get(key string) (T, error) {
 		return item.Value, nil
 	}
 
-	// 否则调用getter函数获取新值
-	value, err := c.getter(key)
+	// 如果存在但已过期，删除它（被动清理）
+	if exists {
+		c.mutex.Lock()
+		// 双重检查
+		if item, ok := c.data[key]; ok && now.After(item.ExpireTime) {
+			delete(c.data, key)
+		}
+		c.mutex.Unlock()
+	}
+
+	// 使用 singleflight 防止缓存穿透
+	v, err, _ := c.sf.Do(key, func() (interface{}, error) {
+		// 再次检查，可能其他协程已经设置了值
+		c.mutex.RLock()
+		item, exists := c.data[key]
+		c.mutex.RUnlock()
+		if exists && time.Now().Before(item.ExpireTime) {
+			return item.Value, nil
+		}
+
+		// 调用 getter 获取新值
+		return c.getter(key)
+	})
+
 	if err != nil {
 		var zero T
 		return zero, err
 	}
+
+	value := v.(T)
 
 	// 更新缓存
 	c.mutex.Lock()
@@ -215,16 +248,26 @@ func (c *Cache[T]) cleanup() {
 	ticker := time.NewTicker(1 * time.Minute)
 	defer ticker.Stop()
 
-	for range ticker.C {
-		c.mutex.Lock()
-
-		now := time.Now()
-		for key, item := range c.data {
-			if now.After(item.ExpireTime) {
-				delete(c.data, key)
+	for {
+		select {
+		case <-c.ctx.Done():
+			return
+		case <-ticker.C:
+			c.mutex.Lock()
+			now := time.Now()
+			for key, item := range c.data {
+				if now.After(item.ExpireTime) {
+					delete(c.data, key)
+				}
 			}
+			c.mutex.Unlock()
 		}
+	}
+}
 
-		c.mutex.Unlock()
+// Close 停止清理协程并释放资源
+func (c *Cache[T]) Close() {
+	if c.cancel != nil {
+		c.cancel()
 	}
 }
