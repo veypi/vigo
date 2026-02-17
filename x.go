@@ -143,6 +143,11 @@ func (x *X) Get(key string) any {
 			return v
 		}
 	}
+	if x.routeVars != nil {
+		if v, ok := x.routeVars[key]; ok {
+			return v
+		}
+	}
 	return x.Request.Context().Value(key)
 }
 
