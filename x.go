@@ -48,7 +48,8 @@ type X struct {
 	writer     http.ResponseWriter
 	Request    *http.Request
 	PathParams PathParams
-	routeVars  map[string]any
+	routeVars  map[string]any // 路由级共享变量（只读）
+	vars       map[string]any // 请求级会话变量
 	fcs        []any
 	fcsInfo    []*HandlerInfo
 	fid        int
@@ -137,22 +138,19 @@ func (x *X) ResponseWriter() http.ResponseWriter {
 }
 
 func (x *X) Get(key string) any {
-	v := x.Request.Context().Value(key)
-	if v != nil {
-		return v
+	if x.vars != nil {
+		if v, ok := x.vars[key]; ok {
+			return v
+		}
 	}
-	if x.routeVars != nil {
-		return x.routeVars[key]
-	}
-	return nil
+	return x.Request.Context().Value(key)
 }
 
 func (x *X) Set(key string, value any) {
-	if x.Request == nil {
-		logv.Warn().Msgf("set %s=%v to nil request", key, value)
-		return
+	if x.vars == nil {
+		x.vars = make(map[string]any, 4)
 	}
-	x.Request = x.Request.WithContext(context.WithValue(x.Request.Context(), key, value))
+	x.vars[key] = value
 }
 
 func (x *X) Context() context.Context {
@@ -205,7 +203,10 @@ func release(x *X) {
 	x.PathParams = x.PathParams[:0]
 	x.Request = nil
 	x.writer = nil
-	x.routeVars = nil
+	// 清理请求级变量，复用 map 容量
+	for k := range x.vars {
+		delete(x.vars, k)
+	}
 	x.fcs = nil
 	x.PipeValue = nil
 	xPool.Put(x)
