@@ -92,7 +92,7 @@ func (app *Application) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !app.config.DisableReqLog {
 		start := nanotime()
 		defer func() {
-			logv.WithNoCaller.Info().Int64("ns", (nanotime()-start)/1e3).Str("method", r.Method).Msg(r.RequestURI)
+			logv.WithNoCaller.Info().Int64("ms", (nanotime()-start)/1e6).Str("method", r.Method).Msg(r.RequestURI)
 		}()
 	}
 	if len(app.muxs) == 0 {

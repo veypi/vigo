@@ -36,7 +36,12 @@ func IgnoreErr(x *X, err error) error {
 
 type FuncSkipBefore func()
 
-var SkipBefore FuncSkipBefore = func() {}
+var (
+	SkipBefore FuncSkipBefore = func() {}
+	Stop                      = func(x *X) {
+		x.Stop()
+	}
+)
 
 type eface struct {
 	_type unsafe.Pointer

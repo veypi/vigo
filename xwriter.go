@@ -107,57 +107,11 @@ func (x *X) File(path string) error {
 	return nil
 }
 
-func (x *X) SSEWriter() func(p []byte) (int, error) {
-	x.writer.Header().Set("Content-Type", "text/event-stream")
-	x.writer.Header().Set("Cache-Control", "no-cache")
-	x.writer.Header().Set("Connection", "keep-alive")
-
+func (x *X) Flush() {
 	flusher, ok := x.writer.(http.Flusher)
-	fc := func(p []byte) (int, error) {
-		l, err := x.writer.Write(p)
-		if err != nil {
-			return l, err
-		}
-		if ok {
-			flusher.Flush()
-		}
-		return l, nil
+	if !ok {
+		http.Error(x.writer, "Streaming unsupported!", http.StatusInternalServerError)
+		return
 	}
-	return fc
-}
-
-func (x *X) SSEEvent() func(string, any) (int, error) {
-	x.writer.Header().Set("Content-Type", "text/event-stream")
-	x.writer.Header().Set("Cache-Control", "no-cache")
-	x.writer.Header().Set("Connection", "keep-alive")
-
-	flusher, ok := x.writer.(http.Flusher)
-
-	return func(event string, data any) (n int, err error) {
-		if event != "" && event != "data" {
-			if nn, err := fmt.Fprintf(x.writer, "event: %s\n", event); err != nil {
-				return nn, err
-			} else {
-				n = n + nn
-			}
-		}
-		if data != nil {
-			if nn, err := fmt.Fprintf(x.writer, "data: %s\n\n", data); err != nil {
-				return nn + n, err
-			} else {
-				n = n + nn
-			}
-		} else {
-			if nn, err := fmt.Fprint(x.writer, "\n"); err != nil {
-				return nn + n, err
-			} else {
-				n = n + nn
-			}
-		}
-
-		if ok {
-			flusher.Flush()
-		}
-		return n, err
-	}
+	flusher.Flush()
 }
