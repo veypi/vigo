@@ -20,7 +20,7 @@ import (
 	"github.com/veypi/vigo/logv"
 )
 
-const version = "v0.6.1"
+const version = "v0.6.2"
 
 type Param struct {
 	Key   string
