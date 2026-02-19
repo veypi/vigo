@@ -232,9 +232,13 @@ import "github.com/veypi/vigo/contrib/auth"
 
 // cfg/config.go - TestAuth for dev, replace with real implementation in production
 var Auth auth.Auth = &auth.TestAuth{}
+// api/init.go
+
+Router.Use(cfg.Auth.PermLogin)
+Router.Post("resource", cfg.Auth.Perm("resource:create"), "description",createResource)
 ```
 
-See: `go doc github.com/veypi/vigo/contrib/auth`
+See: `go doc github.com/veypi/vigo/contrib/auth.Auth`
 
 ---
 
@@ -264,24 +268,24 @@ var Redis = Global.Redis.Client
 ```
 
 ```go
-// init.go
+// init.go export: Router, Config, Init, otherFuncs...
 package app
 
 var Router = vigo.NewRouter()
+var Config = cfg.Global
 
 func init() {
-    Router.Extend("api", api.Router)
-    Router.Extend("ui", ui.Router)
-    vhtml.WrapUI(Router, uifs)
+  Router.Extend("api", api.Router)
+  Router.Extend("ui", ui.Router)
+  vhtml.WrapUI(Router, uifs)
 }
 
 func Init() error {
-    // Initialization logic
-    models.Models.Migrate(cfg.DB())
-    return nil
+  // Initialization logic
+  models.Models.Migrate(cfg.DB())
+  return nil
 }
 
-var App = vigo.New("myapp", Router, cfg.Global, Init)
 ```
 
 ```go
@@ -291,7 +295,8 @@ package main
 import "myproject"
 
 func main() {
-    myproject.App.Run()
+  app := vigo.New("myapp", myproject.Router,myproject.Config, myproject.Init)
+  panic(app.Run())
 }
 ```
 
