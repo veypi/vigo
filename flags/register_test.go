@@ -12,7 +12,7 @@ type Config struct {
 
 func TestAutoRegisterShort(t *testing.T) {
 	cfg := &Config{}
-	f := New("test", "test flags", nil)
+	f := New("test", "test flags")
 	f.AutoRegister(cfg)
 
 	// Verify long flags
@@ -61,9 +61,11 @@ func TestAutoRegisterShort(t *testing.T) {
 	}
 }
 
-type CustomString string
-type CustomInt int
-type CustomBool bool
+type (
+	CustomString string
+	CustomInt    int
+	CustomBool   bool
+)
 
 type CustomConfig struct {
 	Key     CustomString `json:"key" default:"default-key"`
@@ -73,7 +75,7 @@ type CustomConfig struct {
 
 func TestCustomTypes(t *testing.T) {
 	cfg := &CustomConfig{}
-	f := New("test_custom", "test custom types", nil)
+	f := New("test_custom", "test custom types")
 	f.AutoRegister(cfg)
 
 	// Check default values

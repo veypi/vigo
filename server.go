@@ -17,7 +17,7 @@ import (
 	"golang.org/x/net/netutil"
 )
 
-func New(opts ...func(*Config)) (*Application, error) {
+func NewServer(opts ...func(*Config)) (*Application, error) {
 	c := &Config{
 		Host:    "0.0.0.0",
 		Port:    8000,

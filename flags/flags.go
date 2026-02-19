@@ -18,30 +18,11 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-func New(name string, des string, cliOpts any) *Flags {
+func New(name string, des string) *Flags {
 	f := &Flags{
 		FlagSet: *flag.NewFlagSet(name, flag.ExitOnError),
 		des:     des,
 		depth:   0,
-	}
-	if cliOpts != nil {
-		configFile := f.String("f", "./dev.yaml", "the config file")
-		loggerLevel := f.String("l", "debug", "logger_level")
-		loggerPath := f.String("logger_path", "", "logger_path")
-		f.AutoRegister(cliOpts)
-		cmdCfg := f.SubCommand("gen_cfg", "generate cfg file")
-		cmdCfg.Command = func() error {
-			return DumpCfg(*configFile, cliOpts)
-		}
-		f.Before = func() error {
-			LoadCfg(*configFile, cliOpts)
-			f.Parse()
-			logv.SetLevel(logv.AssertFuncErr(logv.ParseLevel(*loggerLevel)))
-			if loggerPath != nil && *loggerPath != "" {
-				logv.SetLogger(logv.FileLogger(*loggerPath))
-			}
-			return nil
-		}
 	}
 	return f
 }
@@ -186,7 +167,7 @@ func (f *Flags) Write(p []byte) (n int, err error) {
 }
 
 func (f *Flags) SubCommand(name, des string) *Flags {
-	s := New(name, des, nil)
+	s := New(name, des)
 	s.depth = f.depth + 1
 	f.subs = append(f.subs, s)
 	s.parent = f
