@@ -197,6 +197,21 @@ type Auth interface {
 	// Check 检查权限 不支持动态解析
 	// permissionID: 完整的权限码，如 "org:orgA"
 	Check(ctx context.Context, userID, permissionID string, level int) bool
+
+	// ========== 资源列表查询 ==========
+
+	// ListResources 查询用户在特定资源类型下的详细权限信息
+	// 用于解决 "查询我有权限的 org 列表" 等场景
+	// userID: 用户ID
+	// resourceType: 资源类型 (奇数层)，如 "org" 或 "org:{orgID}:project"
+	// 返回: map[实例ID]权限等级 (如 {"orgA": 2, "orgB": 7})
+	ListResources(ctx context.Context, userID, resourceType string) (map[string]int, error)
+
+	// ListUsers 查询特定资源的所有协作者及其权限
+	// 用于解决 "查看这个项目有哪些成员" 等场景
+	// permissionID: 资源实例权限码，如 "org:orgA"
+	// 返回: map[用户ID]权限等级 (如 {"user1": 2, "user2": 7})
+	ListUsers(ctx context.Context, permissionID string) (map[string]int, error)
 }
 
 // ========== 数据结构 ==========
@@ -325,10 +340,19 @@ func CreateOrg(x *vigo.X, req *CreateOrgReq) (*OrgResp, error) {
    - 这类接口返回所有数据，必须严格控制权限。
 
 2. **用户侧列表/搜索**（如“我的项目”）：
-   - **不使用** `PermRead` 等资源级检查。
-   - 只使用 `Login()` 确保用户已登录。
-   - 在业务逻辑层（Handler/Service）根据 `UserID` 过滤数据。
-   - 示例：`db.Where("user_id = ?", userID).Find(&projects)`。
+   - **方式一（仅所有者）**：
+     - 使用 `Login()` 确保登录。
+     - 业务层：`db.Where("owner_id = ?", userID).Find(&orgs)`
+   - **方式二（协作模式 - 使用 ListResources）**：
+     - 调用 Auth 接口获取有权限的 ID 列表。
+     - `perms, _ := auth.ListResources(ctx, userID, "org")`
+     - `ids := keys(perms)`
+     - 业务层：`db.Where("id IN ?", ids).Find(&orgs)`
+   - **方式三（混合模式）**：
+     - 同时查询 owner_id 和 授权列表。
+     - `perms, _ := auth.ListResources(...)`
+     - `ids := keys(perms)`
+     - `db.Where("owner_id = ? OR id IN ?", userID, ids).Find(&orgs)`
 
 3. **`PermXXX` 适用场景**：
    - 针对 **特定资源实例** 的操作（URL 中包含 ID，如 `/projects/{id}`）。
