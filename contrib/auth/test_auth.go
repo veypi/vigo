@@ -24,7 +24,7 @@ var _ Auth = (*TestAuth)(nil)
 
 // UserID 获取当前用户ID
 func (a *TestAuth) UserID(x *vigo.X) string {
-	return "test_user_001"
+	return "test"
 }
 
 // Login 检查用户是否登录
@@ -80,4 +80,40 @@ func (a *TestAuth) Revoke(ctx context.Context, userID, permissionID string) erro
 // Check 检查权限
 func (a *TestAuth) Check(ctx context.Context, userID, permissionID string, level int) bool {
 	return true // 总是通过
+}
+
+// ListResources 查询用户在特定资源类型下的详细权限信息
+func (a *TestAuth) ListResources(ctx context.Context, userID, resourceType string) (map[string]int, error) {
+	// 返回一个模拟数据，方便测试列表过滤逻辑
+	// 假设用户对 "test_resource_1" 有读权限，对 "test_resource_2" 有管理员权限
+	return map[string]int{
+		"test_resource_1": LevelRead,
+		"test_resource_2": LevelAdmin,
+	}, nil
+}
+
+// ListUsers 查询特定资源的所有协作者及其权限
+func (a *TestAuth) ListUsers(ctx context.Context, permissionID string) (map[string]int, error) {
+	// 返回一个模拟数据
+	return map[string]int{
+		"test_user_001": LevelAdmin,
+		"test_user_002": LevelRead,
+	}, nil
+}
+
+// ========== 角色管理 ==========
+
+// GrantRole 授予角色
+func (a *TestAuth) GrantRole(ctx context.Context, userID, roleCode string) error {
+	return nil // 授予成功
+}
+
+// RevokeRole 撤销角色
+func (a *TestAuth) RevokeRole(ctx context.Context, userID, roleCode string) error {
+	return nil // 撤销成功
+}
+
+// AddRole 添加角色定义 (用于初始化)
+func (a *TestAuth) AddRole(code, name string, policies ...string) error {
+	return nil // 添加成功
 }

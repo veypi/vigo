@@ -85,4 +85,28 @@ type Auth interface {
 	// Check 检查权限 不支持动态解析
 	// permissionID: 完整的权限码，如 "org:orgA"
 	Check(ctx context.Context, userID, permissionID string, level int) bool
+
+	// ========== 资源列表查询 ==========
+
+	// ListResources 查询用户在特定资源类型下的详细权限信息
+	// 用于解决 "查询我有权限的 org 列表" 等场景
+	// userID: 用户ID
+	// resourceType: 资源类型 (奇数层)，如 "org" 或 "org:{orgID}:project"
+	// 返回: map[实例ID]权限等级 (如 {"orgA": 2, "orgB": 7})
+	ListResources(ctx context.Context, userID, resourceType string) (map[string]int, error)
+
+	// ListUsers 查询特定资源的所有协作者及其权限
+	// 用于解决 "查看这个项目有哪些成员" 等场景
+	// permissionID: 资源实例权限码，如 "org:orgA"
+	// 返回: map[用户ID]权限等级 (如 {"user1": 2, "user2": 7})
+	ListUsers(ctx context.Context, permissionID string) (map[string]int, error)
+
+	// GrantRole 授予角色
+	GrantRole(ctx context.Context, userID, roleCode string) error
+
+	// RevokeRole 撤销角色
+	RevokeRole(ctx context.Context, userID, roleCode string) error
+
+	// AddRole 添加角色定义 (用于初始化)
+	AddRole(code, name string, policies ...string) error
 }
