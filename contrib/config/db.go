@@ -16,9 +16,11 @@ import (
 	"gorm.io/driver/sqlite"
 	"gorm.io/gorm"
 	"gorm.io/gorm/logger"
+	"gorm.io/gorm/schema"
 )
 
 type Database struct {
+	Prefix string `json:"prefix"`
 	Type   string `json:"type"`
 	DSN    string `json:"dsn"`
 	client *gorm.DB
@@ -40,6 +42,9 @@ func (d *Database) Client() *gorm.DB {
 		var err error
 		d.client, err = gorm.Open(dialect, &gorm.Config{
 			Logger: logger.Default.LogMode(logger.Silent),
+			NamingStrategy: schema.NamingStrategy{
+				TablePrefix: d.Prefix,
+			},
 		})
 		if err != nil {
 			panic(fmt.Errorf("数据库连接失败: %w", err))
