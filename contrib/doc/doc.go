@@ -16,8 +16,8 @@ func New(r vigo.Router, docFS fs.FS, prefix string) *DocFS {
 		router: r,
 	}
 	d.router.After(common.JsonResponse, common.JsonErrorResponse)
-	d.router.Get("/", d.Dir)
-	d.router.Get("/{path:*}", d.Dir)
+	d.router.Get("/", "获取文档列表", d.Dir)
+	d.router.Get("/{path:*}", "获取详细文档", d.Dir)
 	return d
 }
 
@@ -34,7 +34,7 @@ type ItemResponse struct {
 }
 
 type DirOpts struct {
-	Path  string  `json:"path" src:"path" desc:"The path to the directory."`
+	Path  string  `json:"path" src:"path" desc:"The path to the directory." default:""`
 	Depth int     `json:"depth" src:"query" desc:"The depth of the directory to list. -1 is unlimit" default:"1"`
 	Toc   *bool   `json:"toc" src:"query" desc:"If true, return the table of contents of the markdown file."`
 	From  *string `json:"from" src:"query" desc:"Start section number (inclusive)."`
