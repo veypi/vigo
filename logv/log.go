@@ -55,9 +55,7 @@ func ParseLevel(s string) (Level, error) {
 	return Level(l), e
 }
 
-var (
-	enableCaller bool = true
-)
+var enableCaller bool = true
 
 func DisableCaller() {
 	enableCaller = false
@@ -74,14 +72,18 @@ var fileHook = lumberjack.Logger{
 }
 
 // Logger just for dev env, low performance but human-friendly
-var originLoger *zerolog.Logger
-var logger zerolog.Logger
-var WithDeepCaller zerolog.Logger
-var WithNoCaller zerolog.Logger
+var (
+	originLoger    *zerolog.Logger
+	logger         zerolog.Logger
+	WithDeepCaller zerolog.Logger
+	WithNoCaller   zerolog.Logger
+)
 
-var Print = logger.Print
-var Println = logger.Print
-var Printf = logger.Printf
+var (
+	Print   = logger.Print
+	Println = logger.Print
+	Printf  = logger.Printf
+)
 
 func init() {
 	// 输出trace信息，err以上级别调用Err或者Errs使触发
@@ -140,6 +142,7 @@ func ConsoleLogger() *zerolog.Logger {
 	l := zerolog.New(cl)
 	return &l
 }
+
 func ConsoleLoggerWithOutColor() *zerolog.Logger {
 	cl := zerolog.NewConsoleWriter()
 	cl.NoColor = true
@@ -263,6 +266,14 @@ func Assert(guard bool, text string) {
 			panic(fmt.Sprintf("%s:%d %v", f, line, text))
 		} else {
 			panic(text)
+		}
+	}
+}
+
+func AssertMutilError(errs ...error) {
+	for _, e := range errs {
+		if e != nil {
+			panic(e)
 		}
 	}
 }
