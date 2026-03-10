@@ -446,7 +446,7 @@ func (e *EventManager) executeTask(ctx context.Context, item *taskItem, source s
 				if err != nil {
 					logv.WithNoCaller.Error().Err(err).Str("id", item.key).Str("source", source).Dur("duration", cost).Msg("vigo.event")
 				} else {
-					logv.WithNoCaller.Info().Str("id", item.key).Str("source", source).Dur("duration", cost).Msg("vigo.event")
+					logv.WithNoCaller.Debug().Str("id", item.key).Str("source", source).Dur("duration", cost).Msg("vigo.event")
 				}
 			}
 		}()
