@@ -15,26 +15,26 @@ import (
 var (
 	// 4xx 客户端错误
 	// 400xx 参数相关错误
-	ErrBadRequest     = NewError("bad request").WithCode(40000)
-	ErrInvalidArg     = NewError("invalid arg").WithCode(40001)
-	ErrMissingArg     = NewError("missing arg").WithCode(40002)
-	ErrArgFormat      = NewError("arg format error").WithCode(40003)
+	ErrBadRequest = NewError("bad request").WithCode(40000)
+	ErrInvalidArg = NewError("invalid arg").WithCode(40001)
+	ErrMissingArg = NewError("missing arg").WithCode(40002)
+	ErrArgFormat  = NewError("arg format error").WithCode(40003)
 
 	// 401xx 认证授权相关错误
-	ErrUnauthorized   = NewError("unauthorized").WithCode(40100)  // 未登录/无token
-	ErrTokenInvalid   = NewError("token invalid").WithCode(40101) // token无效
-	ErrTokenExpired   = NewError("token expired").WithCode(40102) // token过期
-	ErrNoPermission   = NewError("no permission").WithCode(40103) // 无操作权限
-	ErrForbidden      = NewError("forbidden").WithCode(40300)     // 禁止访问
+	ErrUnauthorized = NewError("unauthorized").WithCode(40100)  // 未登录/无token
+	ErrTokenInvalid = NewError("token invalid").WithCode(40101) // token无效
+	ErrTokenExpired = NewError("token expired").WithCode(40102) // token过期
+	ErrNoPermission = NewError("no permission").WithCode(40103) // 无操作权限
+	ErrForbidden    = NewError("forbidden").WithCode(40300)     // 禁止访问
 
 	// 404xx 资源不存在
-	ErrNotFound       = NewError("not found").WithCode(40400)
+	ErrNotFound         = NewError("not found").WithCode(40400)
 	ErrResourceNotFound = NewError("resource not found").WithCode(40401)
 	ErrEndpointNotFound = NewError("endpoint not found").WithCode(40402)
 
 	// 409xx 资源冲突
-	ErrConflict       = NewError("resource conflict").WithCode(40900)
-	ErrAlreadyExists  = NewError("resource already exists").WithCode(40901)
+	ErrConflict      = NewError("resource conflict").WithCode(40900)
+	ErrAlreadyExists = NewError("resource already exists").WithCode(40901)
 
 	// 429xx 限流
 	ErrTooManyRequests = NewError("too many requests").WithCode(42900)
@@ -52,7 +52,6 @@ var (
 
 	// 503xx 服务不可用
 	ErrServiceUnavailable = NewError("service unavailable").WithCode(50300)
-
 )
 
 type Error struct {
@@ -85,7 +84,7 @@ func (e *Error) WithArgs(a ...any) *Error {
 func (e *Error) WithString(a string) *Error {
 	return &Error{
 		Code:    e.Code,
-		Message: e.Message + "\n" + a,
+		Message: e.Message + ": " + a,
 	}
 }
 
