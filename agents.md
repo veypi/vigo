@@ -68,7 +68,7 @@ func init() {
     Router.Use(PermCheck)
     Router.Get("/{id}", "Get User", getUser)
     Router.Post("/login", vigo.SkipBefore, auth, login)  // Skip parent Before
-    Router.Post("/upload", handler, vigo.Stop)            // Stop after this
+    Router.Post("/upload/{path:*}", handler, vigo.Stop)            // Stop after this
 
     msg := Router.SubRouter("msg")
     msg.Get("/", "List", listMessages)

@@ -182,17 +182,27 @@ r.Any("/api/{path:*}", proxy.ProxyTo("http://backend:8080"))
 ```go
 import "github.com/veypi/vigo/contrib/ufs"
 
-// 创建 UFS (按优先级搜索)
-fs := ufs.New(
-    "./local",           // 本地目录
-    embedFS,             // embed.FS
-    ufs.Embed(embedFS, "static"),  // 带前缀的 embed
+// 本地可写文件系统
+localFS, err := ufs.NewLocalFS("./data")
+
+// 嵌入只读文件系统
+embedFS, err := ufs.NewEmbedFS(myEmbedFS, "static")
+
+// 多层联合文件系统 (只读，按优先级搜索)
+multiFS := ufs.NewMultiFS(
+    localFS,    // 第一层
+    embedFS,    // 第二层
 )
 
-// 使用
-file, err := fs.Open("index.html")
-entries, err := fs.ReadDir(".")
-info, err := fs.Stat("file.txt")
+// HTTP Handler (支持 ETag/Last-Modified/304 缓存)
+handler := ufs.NewHandler(multiFS)
+handlerWithDefault := ufs.NewHandlerWithDefault(multiFS, "index.html")
+
+// 自定义缓存控制
+opts := &ufs.HandlerOptions{
+    CacheControl: "public, max-age=3600",
+}
+handler := ufs.NewHandler(embedFS, opts)
 ```
 
 ## doc - 文档文件系统
