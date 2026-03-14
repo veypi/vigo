@@ -26,8 +26,8 @@ func TestXWriter_JSON(t *testing.T) {
 	if resp.Code != 200 { // default status
 		t.Errorf("Expected 200, got %d", resp.Code)
 	}
-	if resp.Header().Get("Content-Type") != "application/json" {
-		t.Errorf("Expected application/json, got %s", resp.Header().Get("Content-Type"))
+	if resp.Header().Get("Content-Type") != "application/json; charset=utf-8" {
+		t.Errorf("Expected application/json; charset=utf-8, got %s", resp.Header().Get("Content-Type"))
 	}
 
 	var res map[string]string

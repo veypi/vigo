@@ -54,13 +54,11 @@ var Default = NewEventManager()
 // NewEventManager creates a new, independent EventManager.
 // Most users should use the package-level Add/Start/Stop functions instead.
 func NewEventManager() *EventManager {
-	client := config.Redis{Addr: "memory"}
 	return &EventManager{
 		tasks:              make(map[string]*taskItem),
 		pendingReverseDeps: make(map[string][]string),
 		doneChans:          make(map[string]chan struct{}),
 		orderedKeys:        make([]string, 0),
-		redisClient:        client.Client(),
 		serialChan:         make(chan *taskItem, 1024), // Buffered channel for serial tasks
 	}
 }
@@ -308,14 +306,15 @@ func (e *EventManager) Start() {
 // This function blocks until all tasks have completed or the context is cancelled.
 func (e *EventManager) Stop() {
 	e.mu.Lock()
-	defer e.mu.Unlock()
-
 	if !e.running {
+		e.mu.Unlock()
 		return
 	}
-
-	e.cancel()
+	cancel := e.cancel
 	e.running = false
+	e.mu.Unlock()
+
+	cancel()
 	e.wg.Wait()
 }
 
@@ -393,6 +392,9 @@ func (e *EventManager) Clear() error {
 	}
 	e.mu.RUnlock()
 
+	if client == nil {
+		client = config.SharedRedis()
+	}
 	if client == nil || len(keys) == 0 {
 		return nil
 	}
@@ -458,6 +460,9 @@ func (e *EventManager) executeTask(ctx context.Context, item *taskItem, source s
 		e.mu.RLock()
 		client := e.redisClient
 		e.mu.RUnlock()
+		if client == nil {
+			client = config.SharedRedis()
+		}
 
 		if client == nil {
 			logv.Warn().Msg(fmt.Sprintf("Task %s is marked as distributed but Redis client is not set. Running locally.", item.key))

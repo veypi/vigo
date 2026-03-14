@@ -8,11 +8,17 @@
 package vigo
 
 import (
+	"bufio"
+	"context"
 	"crypto/tls"
+	"errors"
+	"io"
 	"net"
 	"net/http"
 	"strings"
+	"sync"
 
+	"github.com/google/uuid"
 	"github.com/veypi/vigo/logv"
 	"golang.org/x/net/netutil"
 )
@@ -36,18 +42,14 @@ func NewServer(opts ...func(*Config)) (*Application, error) {
 	app.server = &http.Server{
 		Addr:              c.Url(),
 		TLSConfig:         c.TlsCfg,
-		ReadTimeout:       0,
-		ReadHeaderTimeout: 0,
-		WriteTimeout:      0,
-		IdleTimeout:       0,
-		MaxHeaderBytes:    0,
+		ReadTimeout:       c.ReadTimeout,
+		ReadHeaderTimeout: c.ReadHeaderTimeout,
+		WriteTimeout:      c.WriteTimeout,
+		IdleTimeout:       c.IdleTimeout,
+		MaxHeaderBytes:    c.MaxHeaderBytes,
 		TLSNextProto:      nil,
 		ConnState:         nil,
 		ErrorLog:          nil,
-		// TODO
-		BaseContext: nil,
-		// TODO
-		ConnContext: nil,
 	}
 	app.server.Handler = app
 
@@ -60,6 +62,7 @@ type Application struct {
 	config   *Config
 	server   *http.Server
 	listener net.Listener
+	shutdown sync.Once
 }
 
 func (app *Application) SetMux(m func(w http.ResponseWriter, r *http.Request) func(http.ResponseWriter, *http.Request)) {
@@ -89,23 +92,34 @@ func (app *Application) Domain(d string) Router {
 }
 
 func (app *Application) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	reqID := app.requestID(r)
+	w.Header().Set(app.config.RequestIDHeader, reqID)
+	ctx := context.WithValue(r.Context(), configContextKey, app.config)
+	ctx = context.WithValue(ctx, requestIDContextKey, reqID)
+	r = r.WithContext(ctx)
+	rw := &responseCapture{ResponseWriter: w}
 	if !app.config.DisableReqLog {
 		start := nanotime()
 		defer func() {
-			logv.WithNoCaller.Debug().Int64("ms", (nanotime()-start)/1e6).Str("method", r.Method).Msg(r.RequestURI)
+			logv.WithNoCaller.Debug().
+				Str("request_id", reqID).
+				Int("status", rw.StatusCode()).
+				Int64("ms", (nanotime()-start)/1e6).
+				Str("method", r.Method).
+				Msg(r.RequestURI)
 		}()
 	}
 	if len(app.muxs) == 0 {
-		app.router.ServeHTTP(w, r)
+		app.router.ServeHTTP(rw, r)
 		return
 	}
 	for _, fc := range app.muxs {
-		if tmp := fc(w, r); tmp != nil {
-			tmp(w, r)
+		if tmp := fc(rw, r); tmp != nil {
+			tmp(rw, r)
 			return
 		}
 	}
-	app.router.ServeHTTP(w, r)
+	app.router.ServeHTTP(rw, r)
 }
 
 func (app *Application) Router() Router {
@@ -127,7 +141,11 @@ func (app *Application) Run() error {
 		host = "localhost"
 	}
 	logv.WithNoCaller.Info().Msgf("start on http://%s:%d ", host, app.config.Port)
-	return app.server.Serve(l)
+	err := app.server.Serve(l)
+	if errors.Is(err, http.ErrServerClosed) {
+		return nil
+	}
+	return err
 }
 
 func (app *Application) netListener() (net.Listener, error) {
@@ -146,4 +164,92 @@ func (app *Application) netListener() (net.Listener, error) {
 	}
 	app.listener = l
 	return app.listener, nil
+}
+
+func (app *Application) Shutdown(ctx context.Context) error {
+	var err error
+	app.shutdown.Do(func() {
+		err = app.server.Shutdown(ctx)
+	})
+	return err
+}
+
+func (app *Application) Close() error {
+	var err error
+	app.shutdown.Do(func() {
+		err = app.server.Close()
+	})
+	return err
+}
+
+func (app *Application) requestID(r *http.Request) string {
+	header := app.config.RequestIDHeader
+	if header == "" {
+		header = "X-Request-ID"
+	}
+	if reqID := strings.TrimSpace(r.Header.Get(header)); reqID != "" {
+		return reqID
+	}
+	return uuid.NewString()
+}
+
+type responseCapture struct {
+	http.ResponseWriter
+	statusCode int
+}
+
+func (r *responseCapture) WriteHeader(statusCode int) {
+	if r.statusCode == 0 {
+		r.statusCode = statusCode
+	}
+	r.ResponseWriter.WriteHeader(statusCode)
+}
+
+func (r *responseCapture) Write(p []byte) (int, error) {
+	if r.statusCode == 0 {
+		r.statusCode = http.StatusOK
+	}
+	return r.ResponseWriter.Write(p)
+}
+
+func (r *responseCapture) StatusCode() int {
+	if r.statusCode == 0 {
+		return http.StatusOK
+	}
+	return r.statusCode
+}
+
+func (r *responseCapture) Flush() {
+	if flusher, ok := r.ResponseWriter.(http.Flusher); ok {
+		if r.statusCode == 0 {
+			r.statusCode = http.StatusOK
+		}
+		flusher.Flush()
+	}
+}
+
+func (r *responseCapture) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	hijacker, ok := r.ResponseWriter.(http.Hijacker)
+	if !ok {
+		return nil, nil, errors.New("response writer does not support hijacking")
+	}
+	return hijacker.Hijack()
+}
+
+func (r *responseCapture) Push(target string, opts *http.PushOptions) error {
+	pusher, ok := r.ResponseWriter.(http.Pusher)
+	if !ok {
+		return http.ErrNotSupported
+	}
+	return pusher.Push(target, opts)
+}
+
+func (r *responseCapture) ReadFrom(src io.Reader) (int64, error) {
+	if rf, ok := r.ResponseWriter.(io.ReaderFrom); ok {
+		if r.statusCode == 0 {
+			r.statusCode = http.StatusOK
+		}
+		return rf.ReadFrom(src)
+	}
+	return io.Copy(r.ResponseWriter, src)
 }

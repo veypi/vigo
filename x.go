@@ -10,11 +10,9 @@ package vigo
 import (
 	"context"
 	"fmt"
-	"net"
 	"net/http"
 	"reflect"
 	"runtime"
-	"strings"
 	"sync"
 
 	"github.com/veypi/vigo/logv"
@@ -45,15 +43,17 @@ func (p PathParams) Try(key string) (string, bool) {
 
 // X is the context for the request
 type X struct {
-	writer     http.ResponseWriter
-	Request    *http.Request
-	PathParams PathParams
-	routeVars  map[string]any // 路由级共享变量（只读）
-	vars       map[string]any // 请求级会话变量
-	fcs        []any
-	fcsInfo    []*HandlerInfo
-	fid        int
-	PipeValue  any
+	writer      http.ResponseWriter
+	Request     *http.Request
+	PathParams  PathParams
+	routeVars   map[string]any // 路由级共享变量（只读）
+	vars        map[string]any // 请求级会话变量
+	fcs         []any
+	fcsInfo     []*HandlerInfo
+	fid         int
+	PipeValue   any
+	wroteHeader bool
+	statusCode  int
 }
 
 var _ http.ResponseWriter = &X{}
@@ -162,29 +162,6 @@ func (x *X) Context() context.Context {
 	return x.Request.Context()
 }
 
-func (x *X) GetRemoteIP() string {
-	// 首先尝试从 X-Forwarded-For 获取 IP 地址
-	ip := x.Request.Header.Get("X-Forwarded-For")
-	if ip != "" {
-		// X-Forwarded-For 可能包含多个 IP 地址，以逗号分隔，
-		// 这里我们取第一个 IP 地址作为客户端的 IP。
-		return strings.TrimSpace(strings.Split(ip, ",")[0])
-	}
-
-	// 如果 X-Forwarded-For 不存在，则尝试从 X-Real-IP 获取 IP 地址
-	ip = x.Request.Header.Get("X-Real-IP")
-	if ip != "" {
-		return ip
-	}
-
-	// 如果以上两个都没有，则直接从 RemoteAddr 获取 IP 地址
-	ip, _, err := net.SplitHostPort(x.Request.RemoteAddr)
-	if err != nil {
-		return ""
-	}
-	return ip
-}
-
 var xPool = sync.Pool{
 	New: func() any {
 		return &X{
@@ -192,6 +169,11 @@ var xPool = sync.Pool{
 		}
 	},
 }
+
+type contextKey string
+
+const configContextKey contextKey = "vigo_config"
+const requestIDContextKey contextKey = "vigo_request_id"
 
 func acquire() *X {
 	v := xPool.Get()
@@ -214,5 +196,38 @@ func release(x *X) {
 	}
 	x.fcs = nil
 	x.PipeValue = nil
+	x.wroteHeader = false
+	x.statusCode = 0
 	xPool.Put(x)
+}
+
+func (x *X) WroteHeader() bool {
+	return x.wroteHeader
+}
+
+func (x *X) StatusCode() int {
+	if x.statusCode == 0 {
+		return http.StatusOK
+	}
+	return x.statusCode
+}
+
+func (x *X) Config() *Config {
+	if x == nil || x.Request == nil {
+		return nil
+	}
+	if cfg, ok := x.Request.Context().Value(configContextKey).(*Config); ok {
+		return cfg
+	}
+	return nil
+}
+
+func (x *X) RequestID() string {
+	if x == nil || x.Request == nil {
+		return ""
+	}
+	if reqID, ok := x.Request.Context().Value(requestIDContextKey).(string); ok {
+		return reqID
+	}
+	return ""
 }

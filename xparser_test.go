@@ -2,6 +2,7 @@ package vigo
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -33,6 +34,17 @@ func createTestX(method, urlStr string, body interface{}) (*X, error) {
 	x := acquire()
 	x.Request = req
 	x.writer = httptest.NewRecorder()
+	return x, nil
+}
+
+func createTestXWithConfig(method, urlStr string, body interface{}, cfg *Config) (*X, error) {
+	x, err := createTestX(method, urlStr, body)
+	if err != nil {
+		return nil, err
+	}
+	if cfg != nil {
+		x.Request = x.Request.WithContext(context.WithValue(x.Request.Context(), configContextKey, cfg))
+	}
 	return x, nil
 }
 
@@ -390,5 +402,29 @@ func TestParseMix(t *testing.T) {
 	}
 	if target.Title != "Hello" {
 		t.Errorf("Expected Title='Hello', got '%s'", target.Title)
+	}
+}
+
+func TestParseJSONBodyTooLarge(t *testing.T) {
+	type Req struct {
+		Name string `json:"name"`
+	}
+
+	payload := map[string]string{
+		"name": strings.Repeat("a", 128),
+	}
+	x, err := createTestXWithConfig("POST", "/", payload, &Config{PostMaxMemory: 32})
+	if err != nil {
+		t.Fatalf("failed to build test context: %v", err)
+	}
+	defer release(x)
+
+	var req Req
+	err = x.Parse(&req)
+	if err == nil {
+		t.Fatal("expected body too large error")
+	}
+	if !strings.Contains(err.Error(), "request body too large") {
+		t.Fatalf("expected body too large error, got %v", err)
 	}
 }

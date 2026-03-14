@@ -8,6 +8,11 @@
 package vigo
 
 import (
+	"context"
+	"errors"
+	"os/signal"
+	"syscall"
+
 	"github.com/veypi/vigo/contrib/event"
 	"github.com/veypi/vigo/flags"
 	"github.com/veypi/vigo/logv"
@@ -91,7 +96,32 @@ func (a *app[T]) Run() error {
 			return err
 		}
 		server.SetRouter(a.Router())
-		return server.Run()
+
+		sigCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		defer stop()
+
+		runErr := make(chan error, 1)
+		go func() {
+			runErr <- server.Run()
+		}()
+
+		select {
+		case err := <-runErr:
+			event.Stop()
+			return err
+		case <-sigCtx.Done():
+			shutdownCtx, cancel := context.WithTimeout(context.Background(), server.config.ShutdownTimeout)
+			defer cancel()
+
+			shutdownErr := server.Shutdown(shutdownCtx)
+			event.Stop()
+
+			err := <-runErr
+			if shutdownErr != nil && !errors.Is(shutdownErr, context.Canceled) {
+				return shutdownErr
+			}
+			return err
+		}
 	}
 	cmdMain.Parse()
 	return cmdMain.Run()

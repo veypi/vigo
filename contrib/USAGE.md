@@ -13,6 +13,12 @@ r.Get("/api/data", cm.Handler)
 
 // 自定义清理间隔
 cm.StartCleanup(5 * time.Minute)
+
+// Redis-backed cache，默认使用 shared redis
+rc := cache.NewRedisCache[string]("user_profile", time.Minute, func(key string) (string, error) {
+    return loadProfile(key)
+})
+value, err := rc.Get("u_1")
 ```
 
 ## common - 通用工具
@@ -78,6 +84,21 @@ redis := &config.Redis{
     DB:       0,
 }
 client := redis.Client()
+
+// 设置共享 Redis，event / redis cache / redis limiter 默认复用
+config.SetSharedRedis(client)
+
+// 或设置共享 Redis 配置，按需懒加载
+config.SetSharedRedisConfig(config.Redis{
+    Addr: "localhost:6379",
+    DB:   0,
+})
+```
+
+### Shared Redis
+
+```go
+client := config.SharedRedis()
 ```
 
 ## cors - 跨域处理
@@ -160,12 +181,22 @@ r.Use(func(x *vigo.X) (any, error) {
 l = limiter.NewAdvancedRequestLimiter(
     10*time.Second, 100, 100*time.Millisecond,
     func(x *vigo.X) string {
-        return x.GetRemoteIP()
+        return requestmeta.RemoteIP(x)
     },
 )
 
 // 内置 key 函数
 key := limiter.GetPathKeyFunc(x)  // ip:path
+
+// Redis 分布式限流，默认使用 shared redis
+rl := limiter.NewRedisRequestLimiter(
+    10*time.Second,
+    100,
+    100*time.Millisecond,
+)
+r.Use(func(x *vigo.X) (any, error) {
+    return rl.Limit(x, nil)
+})
 ```
 
 ## proxy - 反向代理

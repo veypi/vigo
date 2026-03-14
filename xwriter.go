@@ -24,18 +24,29 @@ func (x *X) Header() http.Header {
 }
 
 func (x *X) WriteHeader(statusCode int) {
+	if x.wroteHeader {
+		return
+	}
+	x.wroteHeader = true
+	x.statusCode = statusCode
 	x.writer.WriteHeader(statusCode)
 }
 
 func (x *X) Write(p []byte) (n int, err error) {
+	if !x.wroteHeader {
+		x.WriteHeader(http.StatusOK)
+	}
 	return x.writer.Write(p)
 }
 
 func (x *X) WriteString(s string) (n int, err error) {
-	return x.writer.Write(unsafe.Slice(unsafe.StringData(s), len(s)))
+	return x.Write(unsafe.Slice(unsafe.StringData(s), len(s)))
 }
 
 func (x *X) String(code int, format string, values ...any) error {
+	if x.Header().Get("Content-Type") == "" {
+		x.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	}
 	x.WriteHeader(code)
 	_, err := x.WriteString(fmt.Sprintf(format, values...))
 	return err
@@ -45,20 +56,34 @@ func (x *X) JSON(data any) error {
 	var err error
 	switch v := data.(type) {
 	case string:
-		_, err = x.writer.Write([]byte(v))
+		if x.Header().Get("Content-Type") == "" {
+			x.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		}
+		_, err = x.Write([]byte(v))
 	case []byte:
-		_, err = x.writer.Write(v)
+		if x.Header().Get("Content-Type") == "" {
+			x.Header().Set("Content-Type", "application/octet-stream")
+		}
+		_, err = x.Write(v)
 	case error:
-		_, err = x.writer.Write([]byte(v.Error()))
+		if x.Header().Get("Content-Type") == "" {
+			x.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		}
+		_, err = x.Write([]byte(v.Error()))
 	case nil:
 	case int, uint, int8, uint8, int16, uint16, int32, uint32, int64, uint64, float32, float64, bool:
-		_, err = x.writer.Write((fmt.Appendf([]byte{}, "%v", v)))
+		if x.Header().Get("Content-Type") == "" {
+			x.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		}
+		_, err = x.Write(fmt.Appendf([]byte{}, "%v", v))
 	default:
 		b, err := json.Marshal(data)
 		if err != nil {
 			return err
 		}
-		x.Header().Add("Content-Type", "application/json")
+		if x.Header().Get("Content-Type") == "" {
+			x.Header().Set("Content-Type", "application/json; charset=utf-8")
+		}
 		_, err = x.Write(b)
 	}
 	return err

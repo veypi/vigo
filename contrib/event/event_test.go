@@ -10,6 +10,7 @@ import (
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
+	sharedcfg "github.com/veypi/vigo/contrib/config"
 	"github.com/veypi/vigo/logv"
 )
 
@@ -183,6 +184,53 @@ func TestEvent(t *testing.T) {
 
 		if atomic.LoadInt32(&counter) == 0 {
 			t.Error("expected fallback execution when redis is missing")
+		}
+	})
+
+	t.Run("DistributedTask_UsesSharedRedis", func(t *testing.T) {
+		sharedcfg.SetSharedRedis(rdb)
+
+		e1 := NewEventManager()
+		e2 := NewEventManager()
+
+		var counter int32
+		taskFn := func() error {
+			atomic.AddInt32(&counter, 1)
+			return nil
+		}
+
+		opts := []Option{Every(100 * time.Millisecond), Distributed(50 * time.Millisecond)}
+		e1.Add("shared_default", taskFn, opts...)
+		e2.Add("shared_default", taskFn, opts...)
+
+		e1.Start()
+		e2.Start()
+
+		done := make(chan struct{})
+		go func() {
+			ticker := time.NewTicker(20 * time.Millisecond)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-ticker.C:
+					s.FastForward(20 * time.Millisecond)
+				}
+			}
+		}()
+
+		time.Sleep(450 * time.Millisecond)
+		close(done)
+		e1.Stop()
+		e2.Stop()
+
+		val := atomic.LoadInt32(&counter)
+		if val > 6 {
+			t.Errorf("shared redis lock failed, too many executions: %d", val)
+		}
+		if val < 3 {
+			t.Errorf("shared redis produced too few executions: %d", val)
 		}
 	})
 
@@ -532,6 +580,31 @@ func TestEvent(t *testing.T) {
 
 		if val < 111 {
 			t.Errorf("expected at least 111 (1 serial + 1 dep + periodic), got %d", val)
+		}
+	})
+
+	t.Run("StopDoesNotDeadlock", func(t *testing.T) {
+		e := NewEventManager()
+		e.Add("first", func() error {
+			time.Sleep(20 * time.Millisecond)
+			return nil
+		})
+		e.Add("second", func() error {
+			return nil
+		}, After("first"))
+
+		e.Start()
+
+		done := make(chan struct{})
+		go func() {
+			e.Stop()
+			close(done)
+		}()
+
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			t.Fatal("Stop blocked unexpectedly")
 		}
 	})
 }

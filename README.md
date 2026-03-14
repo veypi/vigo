@@ -115,6 +115,15 @@ Vigo 支持将 HTTP 请求参数自动解析到 Go 结构体中。
 - `default`: 设置默认值 (仅限非指针/非JSON字段)
 - `json`: 指定 JSON 字段名
 
+**请求来源说明**:
+- 请求来源解析位于 `contrib/requestmeta`，例如 `requestmeta.RemoteIP(x)`。
+- 只有在 `Config.TrustedProxies` 或 `WithTrustedProxies(...)` 显式配置可信代理后，才会信任 `X-Forwarded-For` / `X-Real-IP`。
+
+**请求追踪说明**:
+- Server 默认会生成或透传请求 ID，并写回响应头，默认头名为 `X-Request-ID`。
+- 可通过 `WithRequestIDHeader(...)` 或 `Config.RequestIDHeader` 自定义头名。
+- handler 中可通过 `x.RequestID()` 读取当前请求 ID。
+
 **示例**:
 - `src:"query@page_size"`: 映射 URL 参数 `?page_size=10` 到结构体字段
 - `src:"header@X-User-ID"`: 映射请求头 `X-User-ID` 到结构体字段
@@ -244,4 +253,3 @@ router.Post("/users", CreateUser)
 
 - **框架**: vigo (github.com/veypi/vigo)
 - **语言**: Golang 1.24+
-

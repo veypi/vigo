@@ -137,6 +137,8 @@ func getOrCreateTypeInfo(rt reflect.Type) *typeInfo {
 // tag标签 src:"path/header/query/form/json" 可以追加为 path@alias_name
 // tag标签 default:""
 func (x *X) Parse(target any) error {
+	x.limitRequestBody()
+
 	parsedJSON := false
 	parseJSON := func() error {
 		if parsedJSON {
@@ -150,10 +152,14 @@ func (x *X) Parse(target any) error {
 
 		// Reset body if needed? No, usually body can only be read once.
 		// Assuming this function is called only once or handled correctly.
-		err := json.NewDecoder(x.Request.Body).Decode(target)
+		decoder := json.NewDecoder(x.Request.Body)
+		err := decoder.Decode(target)
+		var maxErr *http.MaxBytesError
 		if errors.Is(err, io.EOF) {
 			// Empty body is not an error
 			return nil
+		} else if errors.As(err, &maxErr) {
+			return ErrBadRequest.WithMessage("request body too large")
 		} else if err != nil {
 			return ErrInvalidArg.WithArgs(err)
 		}
@@ -171,11 +177,19 @@ func (x *X) Parse(target any) error {
 	// 检查是否需要解析 multipart form（用于文件上传）
 	contentType := x.Request.Header.Get("Content-Type")
 	if strings.Contains(contentType, "multipart/form-data") {
-		if err := x.Request.ParseMultipartForm(32 << 20); err != nil { // 32MB max
+		if err := x.Request.ParseMultipartForm(x.postMaxMemory()); err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				return ErrBadRequest.WithMessage("request body too large")
+			}
 			return fmt.Errorf("failed to parse multipart form: %w", err)
 		}
 	} else if strings.Contains(contentType, "application/x-www-form-urlencoded") {
 		if err := x.Request.ParseForm(); err != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(err, &maxErr) {
+				return ErrBadRequest.WithMessage("request body too large")
+			}
 			return fmt.Errorf("failed to parse form: %w", err)
 		}
 	}
@@ -259,6 +273,33 @@ func (x *X) Parse(target any) error {
 	}
 
 	return nil
+}
+
+func (x *X) postMaxMemory() int64 {
+	if cfg := x.Config(); cfg != nil && cfg.PostMaxMemory > 0 {
+		return int64(cfg.PostMaxMemory)
+	}
+	return 32 << 20
+}
+
+func (x *X) limitRequestBody() {
+	if x == nil || x.Request == nil || x.Request.Body == nil || x.writer == nil {
+		return
+	}
+	limit := x.postMaxMemory()
+	if limit <= 0 {
+		return
+	}
+	if _, ok := x.Request.Body.(*maxBytesReaderMarker); ok {
+		return
+	}
+	x.Request.Body = &maxBytesReaderMarker{
+		ReadCloser: http.MaxBytesReader(x.writer, x.Request.Body, limit),
+	}
+}
+
+type maxBytesReaderMarker struct {
+	io.ReadCloser
 }
 
 // isFileType 检查是否是文件类型
