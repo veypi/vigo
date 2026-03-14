@@ -225,6 +225,8 @@ event.Add("init.db", func() error { ... })
 event.Add("task.b", func() error { ... }, event.After("init.db"))
 ```
 
+Event distributed locking uses shared Redis by default. Configure shared Redis through `contrib/config` when the application uses Redis-backed contrib modules together.
+
 ### 9.3 Auth Interface
 
 ```go
@@ -239,6 +241,27 @@ Router.Post("resource", cfg.Auth.Perm("resource:create"), "description",createRe
 ```
 
 See: `go doc github.com/veypi/vigo/contrib/auth.Auth`
+
+### 9.4 Shared Redis / Request Meta
+
+```go
+import (
+    "github.com/veypi/vigo/contrib/config"
+    "github.com/veypi/vigo/contrib/requestmeta"
+)
+
+config.SetSharedRedisConfig(config.Redis{Addr: "localhost:6379"})
+client := config.SharedRedis()
+_ = client
+
+ip := requestmeta.RemoteIP(x)
+_ = ip
+```
+
+Guidelines:
+
+- `event`, Redis-backed `cache`, and Redis-backed `limiter` should reuse shared Redis unless there is a clear reason to inject a separate client.
+- Keep request metadata parsing in `contrib/requestmeta`; do not add transport/proxy parsing helpers back onto core `X`.
 
 ---
 
