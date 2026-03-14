@@ -10,7 +10,7 @@ package vigo
 import (
 	"net/http"
 	"reflect"
-	"unsafe"
+	_ "unsafe"
 
 	"github.com/veypi/vigo/contrib/event"
 )
@@ -43,19 +43,6 @@ var (
 	}
 )
 
-type eface struct {
-	_type unsafe.Pointer
-	data  unsafe.Pointer
-}
-
-func getRType(t reflect.Type) unsafe.Pointer {
-	return (*eface)(unsafe.Pointer(&t)).data
-}
-
-func packEface(typ unsafe.Pointer, data unsafe.Pointer) any {
-	return *(*any)(unsafe.Pointer(&eface{typ, data}))
-}
-
 func TryStandardize(fn any) (func(*X) (any, error), bool) {
 	fnType := reflect.TypeOf(fn)
 	if fnType.Kind() != reflect.Func {
@@ -72,6 +59,43 @@ func TryStandardize(fn any) (func(*X) (any, error), bool) {
 	if f, ok := fn.(FuncX2AnyErr); ok {
 		return f, true
 	}
+	if f, ok := fn.(func(*X)); ok {
+		return func(x *X) (any, error) {
+			f(x)
+			return nil, nil
+		}, true
+	}
+	if f, ok := fn.(func(*X) error); ok {
+		return func(x *X) (any, error) {
+			return nil, f(x)
+		}, true
+	}
+	if f, ok := fn.(func(*X) any); ok {
+		return func(x *X) (any, error) {
+			return f(x), nil
+		}, true
+	}
+	if f, ok := fn.(func(*X, any)); ok {
+		return func(x *X) (any, error) {
+			f(x, x.PipeValue)
+			return nil, nil
+		}, true
+	}
+	if f, ok := fn.(func(*X, any) error); ok {
+		return func(x *X) (any, error) {
+			return nil, f(x, x.PipeValue)
+		}, true
+	}
+	if f, ok := fn.(func(*X, any) any); ok {
+		return func(x *X) (any, error) {
+			return f(x, x.PipeValue), nil
+		}, true
+	}
+	if f, ok := fn.(func(*X, any) (any, error)); ok {
+		return func(x *X) (any, error) {
+			return f(x, x.PipeValue)
+		}, true
+	}
 
 	// Case 2: HTTP Handler func(http.ResponseWriter, *http.Request) ...
 	if numIn == 2 && fnType.In(0) == reflect.TypeOf((*http.ResponseWriter)(nil)).Elem() && fnType.In(1) == reflect.TypeOf((*http.Request)(nil)) {
@@ -85,6 +109,11 @@ func TryStandardize(fn any) (func(*X) (any, error), bool) {
 				return nil, nil
 			}, true
 		}
+		if f, ok := fn.(func(http.ResponseWriter, *http.Request) error); ok {
+			return func(x *X) (any, error) {
+				return nil, f(x.ResponseWriter(), x.Request)
+			}, true
+		}
 
 		// Fallback to reflection for HTTP handler if it has return values (unlikely for standard signature)
 		// The standard signature is void return.
@@ -95,21 +124,19 @@ func TryStandardize(fn any) (func(*X) (any, error), bool) {
 		fnValue := reflect.ValueOf(fn)
 		resultHandler := makeResultHandler(fnType)
 		return func(x *X) (any, error) {
-			args := []reflect.Value{
+			args := [2]reflect.Value{
 				reflect.ValueOf(x.ResponseWriter()),
 				reflect.ValueOf(x.Request),
 			}
-			return resultHandler(fnValue.Call(args))
+			return resultHandler(fnValue.Call(args[:]))
 		}, true
 	}
 
 	// Case 3: func(*X, [T]) ...
 	if numIn > 0 && fnType.In(0) == reflect.TypeOf((*X)(nil)) {
-		// Try optimization with unsafe casting for common pointer patterns
-		if optimized, ok := tryOptimizeUnsafe(fn, fnType); ok {
+		if optimized, ok := createTypedRequestFunc(fn, fnType); ok {
 			return optimized, true
 		}
-		// Fallback to reflection
 		return createStandardizedFunc(fn, fnType), true
 	}
 
@@ -130,164 +157,6 @@ func Standardize[T any](handler T) FuncX2AnyErr {
 
 	// 3. Panic if unsupported (initialization time check)
 	panic("vigo: handler function signature not supported: " + reflect.TypeOf(handler).String())
-}
-
-func tryOptimizeUnsafe(fn any, fnType reflect.Type) (func(*X) (any, error), bool) {
-	numIn := fnType.NumIn()
-	numOut := fnType.NumOut()
-
-	// Helper types for unsafe casting
-	type FuncIn1RetErr func(*X) error
-	type FuncIn1RetPtr func(*X) (unsafe.Pointer, error)
-	type FuncIn1RetAny func(*X) (any, error)
-
-	type FuncIn2PtrRetErr func(*X, unsafe.Pointer) error
-	type FuncIn2PtrRetPtr func(*X, unsafe.Pointer) (unsafe.Pointer, error)
-	type FuncIn2PtrRetAny func(*X, unsafe.Pointer) (any, error)
-
-	type FuncIn2AnyRetErr func(*X, any) error
-	type FuncIn2AnyRetPtr func(*X, any) (unsafe.Pointer, error)
-	type FuncIn2AnyRetAny func(*X, any) (any, error)
-
-	// Get function pointer
-	fnPtr := (*eface)(unsafe.Pointer(&fn)).data
-
-	// 1. Single Input: func(*X)
-	if numIn == 1 {
-		if numOut == 1 && fnType.Out(0) == reflect.TypeOf((*error)(nil)).Elem() {
-			// func(*X) error
-			casted := *(*FuncIn1RetErr)(unsafe.Pointer(&fnPtr))
-			return func(x *X) (any, error) {
-				return nil, casted(x)
-			}, true
-		}
-		if numOut == 2 && fnType.Out(1) == reflect.TypeOf((*error)(nil)).Elem() {
-			out0 := fnType.Out(0)
-			if out0.Kind() == reflect.Ptr {
-				// func(*X) (*R, error)
-				casted := *(*FuncIn1RetPtr)(unsafe.Pointer(&fnPtr))
-				out0Typ := getRType(out0)
-				return func(x *X) (any, error) {
-					res, err := casted(x)
-					if err != nil {
-						return nil, err
-					}
-					// Wrap pointer in interface
-					return packEface(out0Typ, res), nil
-				}, true
-			}
-			if out0.Kind() == reflect.Interface {
-				// func(*X) (any, error)
-				// Since FuncX2AnyErr is already checked, this handles other interface returns
-				casted := *(*FuncIn1RetAny)(unsafe.Pointer(&fnPtr))
-				return func(x *X) (any, error) {
-					return casted(x)
-				}, true
-			}
-		}
-	}
-
-	// 2. Two Inputs: func(*X, T)
-	if numIn == 2 {
-		in1 := fnType.In(1)
-
-		// 2a. Input is Pointer: func(*X, *T)
-		if in1.Kind() == reflect.Ptr {
-			elemType := in1.Elem()
-			// Prepare allocator
-			// We need to allocate *T.
-			// reflect.New(elemType) returns Value wrapping *T.
-			// We can get UnsafePointer from it.
-
-			// Check output
-			if numOut == 1 && fnType.Out(0) == reflect.TypeOf((*error)(nil)).Elem() {
-				// func(*X, *T) error
-				casted := *(*FuncIn2PtrRetErr)(unsafe.Pointer(&fnPtr))
-				return func(x *X) (any, error) {
-					// Allocate T
-					val := reflect.New(elemType)
-					ptr := val.UnsafePointer()
-					// Parse into T
-					if err := x.Parse(val.Interface()); err != nil {
-						return nil, err
-					}
-					return nil, casted(x, ptr)
-				}, true
-			}
-
-			if numOut == 2 && fnType.Out(1) == reflect.TypeOf((*error)(nil)).Elem() {
-				out0 := fnType.Out(0)
-				if out0.Kind() == reflect.Ptr {
-					// func(*X, *T) (*R, error)
-					casted := *(*FuncIn2PtrRetPtr)(unsafe.Pointer(&fnPtr))
-					out0Typ := getRType(out0)
-					return func(x *X) (any, error) {
-						val := reflect.New(elemType)
-						ptr := val.UnsafePointer()
-						if err := x.Parse(val.Interface()); err != nil {
-							return nil, err
-						}
-						res, err := casted(x, ptr)
-						if err != nil {
-							return nil, err
-						}
-						return packEface(out0Typ, res), nil
-					}, true
-				}
-				if out0.Kind() == reflect.Interface {
-					// func(*X, *T) (any, error)
-					casted := *(*FuncIn2PtrRetAny)(unsafe.Pointer(&fnPtr))
-					return func(x *X) (any, error) {
-						val := reflect.New(elemType)
-						ptr := val.UnsafePointer()
-						if err := x.Parse(val.Interface()); err != nil {
-							return nil, err
-						}
-						return casted(x, ptr)
-					}, true
-				}
-			}
-		}
-
-		// 2b. Input is Interface (PipeValue): func(*X, any)
-		if in1.Kind() == reflect.Interface && in1.NumMethod() == 0 {
-			// func(*X, any) ...
-			// PipeValue handling
-
-			if numOut == 1 && fnType.Out(0) == reflect.TypeOf((*error)(nil)).Elem() {
-				// func(*X, any) error
-				casted := *(*FuncIn2AnyRetErr)(unsafe.Pointer(&fnPtr))
-				return func(x *X) (any, error) {
-					return nil, casted(x, x.PipeValue)
-				}, true
-			}
-
-			if numOut == 2 && fnType.Out(1) == reflect.TypeOf((*error)(nil)).Elem() {
-				out0 := fnType.Out(0)
-				if out0.Kind() == reflect.Ptr {
-					// func(*X, any) (*R, error)
-					casted := *(*FuncIn2AnyRetPtr)(unsafe.Pointer(&fnPtr))
-					out0Typ := getRType(out0)
-					return func(x *X) (any, error) {
-						res, err := casted(x, x.PipeValue)
-						if err != nil {
-							return nil, err
-						}
-						return packEface(out0Typ, res), nil
-					}, true
-				}
-				if out0.Kind() == reflect.Interface {
-					// func(*X, any) (any, error)
-					casted := *(*FuncIn2AnyRetAny)(unsafe.Pointer(&fnPtr))
-					return func(x *X) (any, error) {
-						return casted(x, x.PipeValue)
-					}, true
-				}
-			}
-		}
-	}
-
-	return nil, false
 }
 
 func makeResultHandler(fnType reflect.Type) func([]reflect.Value) (any, error) {
@@ -319,62 +188,61 @@ func makeResultHandler(fnType reflect.Type) func([]reflect.Value) (any, error) {
 	}
 }
 
+func createTypedRequestFunc(originalFn any, fnType reflect.Type) (func(*X) (any, error), bool) {
+	if fnType.NumIn() != 2 || fnType.In(0) != reflect.TypeOf((*X)(nil)) {
+		return nil, false
+	}
+
+	reqType := fnType.In(1)
+	if reqType.Kind() != reflect.Ptr {
+		return nil, false
+	}
+	return nil, false
+}
+
 // 使用反射创建规则化的函数
 func createStandardizedFunc(originalFn any, fnType reflect.Type) func(*X) (any, error) {
 	fnValue := reflect.ValueOf(originalFn)
 	numIn := fnType.NumIn()
+	resultHandler := makeResultHandler(fnType)
 
-	// Pre-calculate argument generators
-	var argGenerators []func(*X) (reflect.Value, error)
-
-	// Arg 0 is always *X
-	argGenerators = append(argGenerators, func(x *X) (reflect.Value, error) {
-		return reflect.ValueOf(x), nil
-	})
-
-	if numIn == 2 {
-		tType := fnType.In(1)
-		if tType.Kind() == reflect.Interface && tType.NumMethod() == 0 {
-			// PipeValue
-			argGenerators = append(argGenerators, func(x *X) (reflect.Value, error) {
-				if x.PipeValue == nil {
-					return reflect.Zero(tType), nil
-				}
-				return reflect.ValueOf(x.PipeValue), nil
-			})
-		} else {
-			// Request Object
-			isPtr := tType.Kind() == reflect.Ptr
-			var elemType reflect.Type
-			if isPtr {
-				elemType = tType.Elem()
-			} else {
-				elemType = tType
-			}
-			argGenerators = append(argGenerators, func(x *X) (reflect.Value, error) {
-				val := reflect.New(elemType)
-				if err := x.Parse(val.Interface()); err != nil {
-					return reflect.Value{}, err
-				}
-				if isPtr {
-					return val, nil
-				}
-				return val.Elem(), nil
-			})
+	if numIn == 1 {
+		return func(x *X) (any, error) {
+			args := [1]reflect.Value{reflect.ValueOf(x)}
+			return resultHandler(fnValue.Call(args[:]))
 		}
 	}
 
-	resultHandler := makeResultHandler(fnType)
+	tType := fnType.In(1)
+	if tType.Kind() == reflect.Interface && tType.NumMethod() == 0 {
+		return func(x *X) (any, error) {
+			var pipeValue reflect.Value
+			if x.PipeValue == nil {
+				pipeValue = reflect.Zero(tType)
+			} else {
+				pipeValue = reflect.ValueOf(x.PipeValue)
+			}
+			args := [2]reflect.Value{reflect.ValueOf(x), pipeValue}
+			return resultHandler(fnValue.Call(args[:]))
+		}
+	}
+
+	isPtr := tType.Kind() == reflect.Ptr
+	elemType := tType
+	if isPtr {
+		elemType = tType.Elem()
+	}
 
 	return func(x *X) (any, error) {
-		args := make([]reflect.Value, len(argGenerators))
-		for i, gen := range argGenerators {
-			val, err := gen(x)
-			if err != nil {
-				return nil, err
-			}
-			args[i] = val
+		val := reflect.New(elemType)
+		if err := x.Parse(val.Interface()); err != nil {
+			return nil, err
 		}
-		return resultHandler(fnValue.Call(args))
+		arg1 := val.Elem()
+		if isPtr {
+			arg1 = val
+		}
+		args := [2]reflect.Value{reflect.ValueOf(x), arg1}
+		return resultHandler(fnValue.Call(args[:]))
 	}
 }
