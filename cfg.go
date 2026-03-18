@@ -52,18 +52,7 @@ func (c *Config) IsValid() error {
 	if c.PostMaxMemory == 0 {
 		c.PostMaxMemory = 32 << 20
 	}
-	if c.ReadHeaderTimeout <= 0 {
-		c.ReadHeaderTimeout = 5 * time.Second
-	}
-	if c.ReadTimeout <= 0 {
-		c.ReadTimeout = 30 * time.Second
-	}
-	if c.WriteTimeout <= 0 {
-		c.WriteTimeout = 30 * time.Second
-	}
-	if c.IdleTimeout <= 0 {
-		c.IdleTimeout = 60 * time.Second
-	}
+	// 超时配置默认为 0（无限制），由使用者自行设置
 	if c.ShutdownTimeout <= 0 {
 		c.ShutdownTimeout = 10 * time.Second
 	}

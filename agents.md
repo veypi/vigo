@@ -232,12 +232,12 @@ Event distributed locking uses shared Redis by default. Configure shared Redis t
 ```go
 import "github.com/veypi/vigo/contrib/auth"
 
-// cfg/config.go - TestAuth for dev, replace with real implementation in production
-var Auth auth.Auth = &auth.TestAuth{}
+// cfg/config.go - 业务模块持有 Auth 对象
+var Auth auth.Auth
 // api/init.go
 
-Router.Use(cfg.Auth.PermLogin)
-Router.Post("resource", cfg.Auth.Perm("resource:create"), "description",createResource)
+Router.Use(cfg.Auth.Login())
+Router.Post("resource", cfg.Auth.RequireCreate("resource"), "description", createResource)
 ```
 
 See: `go doc github.com/veypi/vigo/contrib/auth.Auth`
