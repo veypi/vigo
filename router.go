@@ -48,6 +48,8 @@ type Router interface {
 
 	// Doc returns the API documentation structure
 	Doc() *Doc
+	// SetDoc overrides or supplements the request/response schema for a specific route and method.
+	SetDoc(url string, method string, args any, response any) Router
 
 	Clear(url string, method string)
 	SetVar(key string, value any) Router
@@ -632,6 +634,29 @@ func (r *route) Set(prefix string, method string, handlers ...any) Router {
 		Response:     response,
 		ArgsDesc:     desarg,
 	}
+	node.syncCache()
+	return node
+}
+
+func (r *route) SetDoc(prefix string, method string, args any, response any) Router {
+	method = strings.ToUpper(method)
+	logv.Assert(slices.Contains(allowedMethods, method), fmt.Sprintf("not support HTTP method: %v", method))
+
+	node := r.get_subrouter(prefix)
+	if node.methods == nil {
+		node.methods = make(map[string]*RouteHandler)
+	}
+	if node.methods[method] == nil {
+		node.methods[method] = &RouteHandler{}
+	}
+
+	if args != nil {
+		node.methods[method].Args = args
+	}
+	if response != nil {
+		node.methods[method].Response = response
+	}
+
 	node.syncCache()
 	return node
 }

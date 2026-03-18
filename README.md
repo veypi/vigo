@@ -208,6 +208,23 @@ Vigo 支持极其灵活的 Handler 函数签名，你可以根据需要选择最
 - `func(http.ResponseWriter, *http.Request)`
 - `func(http.ResponseWriter, *http.Request) error`
 
+如果自动推导的接口文档不够准确，或者 handler 签名本身不带请求/响应结构体，可以在注册后手动补充文档：
+
+```go
+type CreateUserReq struct {
+    Name string `json:"name" src:"json" desc:"用户名"`
+}
+
+type CreateUserResp struct {
+    ID string `json:"id" desc:"用户 ID"`
+}
+
+router.Post("/users", "创建用户", createUser)
+router.SetDoc("/users", "POST", CreateUserReq{}, CreateUserResp{})
+```
+
+`SetDoc` 会按 `path + method` 覆盖该路由的请求/响应文档定义；未传的一侧保持自动推导结果不变。
+
 ### 3. 高级用法
 
 #### 3.1 跳过前置中间件

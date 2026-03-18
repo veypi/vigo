@@ -291,3 +291,63 @@ func TestDocIntegration(t *testing.T) {
 		t.Errorf("Route /version response type expected string, got %s", routeVersion.Response.Type)
 	}
 }
+
+func TestDocIntegration_SetDoc(t *testing.T) {
+	r := NewRouter()
+
+	type ManualReq struct {
+		ID    string `src:"path@id"`
+		Query string `src:"query" json:"query"`
+	}
+	type ManualResp struct {
+		OK bool `json:"ok"`
+	}
+	type AutoResp struct {
+		Name string `json:"name"`
+	}
+
+	r.Get("/manual/{id}", "manual doc", func(x *X) error {
+		return nil
+	})
+	r.SetDoc("/manual/{id}", "GET", ManualReq{}, ManualResp{})
+
+	r.Get("/override", "override doc", func(x *X) (*AutoResp, error) {
+		return &AutoResp{}, nil
+	})
+	r.SetDoc("/override", "GET", nil, ManualResp{})
+
+	doc := r.Doc()
+	findRoute := func(path, method string) *DocRoute {
+		for _, route := range doc.Routes {
+			if route.Path == path && route.Method == method {
+				return route
+			}
+		}
+		return nil
+	}
+
+	manual := findRoute("/manual/{id}", "GET")
+	if manual == nil {
+		t.Fatal("Route /manual/{id} not found")
+	}
+	if manual.Body != nil {
+		t.Fatal("Expected manual route body to be nil")
+	}
+	if len(manual.Params) != 2 {
+		t.Fatalf("Expected 2 manual params, got %d", len(manual.Params))
+	}
+	if manual.Response == nil || manual.Response.Type != "object" {
+		t.Fatalf("Expected manual response object, got %#v", manual.Response)
+	}
+	if len(manual.Response.Fields) != 1 || manual.Response.Fields[0].Name != "ok" {
+		t.Fatalf("Unexpected manual response fields: %#v", manual.Response.Fields)
+	}
+
+	override := findRoute("/override", "GET")
+	if override == nil {
+		t.Fatal("Route /override not found")
+	}
+	if override.Response == nil || len(override.Response.Fields) != 1 || override.Response.Fields[0].Name != "ok" {
+		t.Fatalf("Expected override response to use manual doc, got %#v", override.Response)
+	}
+}
