@@ -10,9 +10,12 @@ package vigo
 import (
 	"context"
 	"errors"
+	"os"
 	"os/signal"
+	"strconv"
 	"syscall"
 
+	"github.com/joho/godotenv"
 	"github.com/veypi/vigo/contrib/event"
 	"github.com/veypi/vigo/flags"
 	"github.com/veypi/vigo/logv"
@@ -65,9 +68,17 @@ func (a *app[T]) Init() error {
 }
 
 func (a *app[T]) Run() error {
+	godotenv.Load()
 	cmdMain := flags.New(a.Name(), "")
-	host := cmdMain.String("host", "0.0.0.0", "")
-	port := cmdMain.Int("p", 4000, "port")
+	host := cmdMain.String("host", flags.LoadEnvOr("HOST", "0.0.0.0"), "host address (env: HOST)")
+	port := cmdMain.Int("p", func() int {
+		if v := os.Getenv("PORT"); v != "" {
+			if i, err := strconv.Atoi(v); err == nil {
+				return i
+			}
+		}
+		return 4000
+	}(), "port (env: PORT)")
 	configFile := cmdMain.String("f", "./dev.yaml", "the config file")
 	loggerLevel := cmdMain.String("l", "debug", "logger_level")
 	loggerPath := cmdMain.String("logger_path", "", "logger_path")

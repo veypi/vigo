@@ -154,7 +154,7 @@ var docTemplate string
 
 func (r *route) Doc() *Doc {
 	doc := &Doc{
-		Title:   "Vigo API",
+		Title:   "API Doc",
 		Version: "1.0.0",
 		Desc:    DefaultApiDesc,
 		Routes:  make([]*DocRoute, 0),

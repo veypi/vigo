@@ -18,7 +18,7 @@ import (
 	"github.com/veypi/vigo/logv"
 )
 
-const version = "v0.6.4"
+const version = "v0.6.5"
 
 type Param struct {
 	Key   string
@@ -172,8 +172,10 @@ var xPool = sync.Pool{
 
 type contextKey string
 
-const configContextKey contextKey = "vigo_config"
-const requestIDContextKey contextKey = "vigo_request_id"
+const (
+	configContextKey    contextKey = "vigo_config"
+	requestIDContextKey contextKey = "vigo_request_id"
+)
 
 func acquire() *X {
 	v := xPool.Get()

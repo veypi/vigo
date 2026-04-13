@@ -38,6 +38,9 @@ type PermFunc func(x *vigo.X) error
 // Provider 是实现端需要实现的 SPI。
 // 业务模块持有 Auth 对象，由调用方注入具体 Provider。
 type Provider interface {
+	// UserID 从请求中提取并验证用户身份凭证（如 token），返回用户 ID。
+	// 如果凭证不存在或无效，应返回空字符串。
+	// 该方法由 Login 中间件调用，用于判断用户是否已登录。
 	UserID(x *vigo.X) string
 	Check(ctx context.Context, userID, permCode string, permLevel int) bool
 	Grant(ctx context.Context, userID, permCode string, permLevel int) error

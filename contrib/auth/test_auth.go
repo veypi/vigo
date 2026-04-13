@@ -23,6 +23,12 @@ type TestAuth = TestProvider
 var _ Provider = (*TestProvider)(nil)
 
 func (a *TestProvider) UserID(x *vigo.X) string {
+	if x != nil && x.Request != nil {
+		u := x.Request.Header.Get("mock_user")
+		if u != "" {
+			return u
+		}
+	}
 	return "test"
 }
 
