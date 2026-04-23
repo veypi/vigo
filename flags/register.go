@@ -58,8 +58,8 @@ func isZeroValue(v reflect.Value) bool {
 }
 
 func LoadEnvOr(key, defaultValue string) string {
-	v := os.Getenv(key)
-	if v != "" {
+	v, ok := os.LookupEnv(key)
+	if ok {
 		return v
 	}
 	return defaultValue
@@ -68,7 +68,7 @@ func LoadEnvOr(key, defaultValue string) string {
 // getDefaultValue 获取字段的默认值（优先使用环境变量，其次使用字段当前值，最后使用default标签）
 func getDefaultValue(field reflect.Value, envKey, defaultTag string) string {
 	// 优先使用环境变量
-	if envValue := os.Getenv(envKey); envValue != "" {
+	if envValue, ok := os.LookupEnv(envKey); ok {
 		return envValue
 	}
 
