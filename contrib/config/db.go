@@ -32,7 +32,7 @@ func (d *Database) Client() *gorm.DB {
 		switch d.Type {
 		case "mysql":
 			dialect = mysql.Open(d.DSN)
-		case "postgres":
+		case "postgresql", "pg", "pgsql":
 			dialect = postgres.Open(d.DSN)
 		case "sqlite", "sqlite3":
 			dialect = sqlite.Open(d.DSN)
