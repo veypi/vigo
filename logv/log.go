@@ -11,6 +11,8 @@ package logv
 
 import (
 	"fmt"
+	"io"
+	"os"
 	"runtime"
 	"strconv"
 
@@ -62,7 +64,7 @@ func DisableCaller() {
 	SetLogger(originLoger)
 }
 
-var fileHook = lumberjack.Logger{
+var FileHook = lumberjack.Logger{
 	Filename:   "",
 	MaxSize:    128, // 每个日志文件保存的最大尺寸 单位：M
 	MaxBackups: 10,  // 日志文件最多保存多少个备份
@@ -116,13 +118,13 @@ func Caller(depth uint) *zerolog.Logger {
 // FileLogger for product, height performance
 func FileLogger(fileName string) *zerolog.Logger {
 	// 会创建644权限文件夹，导致其他用户无法读取
-	fileHook.Filename = fileName
-	l := zerolog.New(&fileHook).With().Caller().Timestamp().Logger()
+	FileHook.Filename = fileName
+	l := zerolog.New(&FileHook).With().Caller().Timestamp().Logger()
 	return &l
 }
 
-func ConsoleLogger() *zerolog.Logger {
-	cl := zerolog.NewConsoleWriter(func(w *zerolog.ConsoleWriter) {
+func ConsoleWriter() io.Writer {
+	return zerolog.NewConsoleWriter(func(w *zerolog.ConsoleWriter) {
 		w.FormatFieldValue = func(i interface{}) string {
 			switch i := i.(type) {
 			case string:
@@ -136,17 +138,34 @@ func ConsoleLogger() *zerolog.Logger {
 			}
 		}
 	})
-	// if runtime.GOOS == "windows" {
-	// 	cl.NoColor = true
-	// }
-	l := zerolog.New(cl)
+}
+
+func ConsoleWriterNoColor() io.Writer {
+	w := zerolog.NewConsoleWriter()
+	w.NoColor = true
+	return w
+}
+
+func ConsoleLogger() *zerolog.Logger {
+	l := zerolog.New(ConsoleWriter())
 	return &l
 }
 
 func ConsoleLoggerWithOutColor() *zerolog.Logger {
-	cl := zerolog.NewConsoleWriter()
-	cl.NoColor = true
-	l := zerolog.New(cl)
+	l := zerolog.New(ConsoleWriterNoColor())
+	return &l
+}
+
+func JSONLogger() *zerolog.Logger {
+	l := zerolog.New(os.Stdout)
+	return &l
+}
+
+func NewLogger(writers ...io.Writer) *zerolog.Logger {
+	if len(writers) == 0 {
+		writers = []io.Writer{os.Stdout}
+	}
+	l := zerolog.New(zerolog.MultiLevelWriter(writers...))
 	return &l
 }
 

@@ -10,6 +10,7 @@ package vigo
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/signal"
 	"strconv"
@@ -82,6 +83,7 @@ func (a *app[T]) Run() error {
 	configFile := cmdMain.String("f", "./dev.yaml", "the config file")
 	loggerLevel := cmdMain.String("l", "debug", "logger_level")
 	loggerPath := cmdMain.String("logger_path", "", "logger_path")
+	loggerMode := cmdMain.String("logger_mode", "console", "logger mode: console | nocolor | json")
 	cmdCfg := cmdMain.SubCommand("gen", "generate cfg file")
 	cmdCfg.Command = func() error {
 		return flags.DumpCfg(*configFile, a.Config())
@@ -90,9 +92,20 @@ func (a *app[T]) Run() error {
 		flags.LoadCfg(*configFile, a.Config())
 		cmdMain.Parse()
 		logv.SetLevel(logv.AssertFuncErr(logv.ParseLevel(*loggerLevel)))
-		if loggerPath != nil && *loggerPath != "" {
-			logv.SetLogger(logv.FileLogger(*loggerPath))
+		var writers []io.Writer
+		switch *loggerMode {
+		case "nocolor":
+			writers = append(writers, logv.ConsoleWriterNoColor())
+		case "json":
+			writers = append(writers, os.Stdout)
+		default:
+			writers = append(writers, logv.ConsoleWriter())
 		}
+		if loggerPath != nil && *loggerPath != "" {
+			logv.FileHook.Filename = *loggerPath
+			writers = append(writers, &logv.FileHook)
+		}
+		logv.SetLogger(logv.NewLogger(writers...))
 		return nil
 	}
 	cmdMain.AutoRegister(a.Config())
