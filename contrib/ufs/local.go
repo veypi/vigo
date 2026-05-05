@@ -8,10 +8,44 @@
 package ufs
 
 import (
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
 )
+
+// validatePath normalizes a path and validates it.
+// Leading "/" are stripped, "" and "/" become ".".
+// Returns the cleaned path, or an *fs.PathError if the path is invalid.
+func validatePath(name, op string) (string, error) {
+	for len(name) > 0 && name[0] == '/' {
+		name = name[1:]
+	}
+	if name == "" {
+		name = "."
+	}
+	if !fs.ValidPath(name) {
+		return name, &fs.PathError{Op: op, Path: name, Err: fs.ErrInvalid}
+	}
+	return name, nil
+}
+
+// fsErr extracts the underlying error from OS errors and wraps it in *fs.PathError
+// so that the virtual path is exposed instead of the real filesystem path.
+func fsErr(err error, op, name string) error {
+	if err == nil {
+		return nil
+	}
+	var pe *os.PathError
+	if errors.As(err, &pe) {
+		return &fs.PathError{Op: op, Path: name, Err: pe.Err}
+	}
+	var le *os.LinkError
+	if errors.As(err, &le) {
+		return &fs.PathError{Op: op, Path: name, Err: le.Err}
+	}
+	return err
+}
 
 // localFS implements FS interface for local file system
 type localFS struct {
@@ -20,92 +54,102 @@ type localFS struct {
 
 // NewLocalFS creates a new local file system with full read-write support
 func NewLocalFS(root string) (FS, error) {
-	// Ensure root directory exists
 	if err := os.MkdirAll(root, 0755); err != nil {
 		return nil, err
 	}
 	return &localFS{root: root}, nil
 }
 
-// Open implements fs.FS
 func (f *localFS) Open(name string) (fs.File, error) {
-	if !fs.ValidPath(name) {
-		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
-	}
-	return os.Open(filepath.Join(f.root, name))
-}
-
-// ReadDir implements fs.ReadDirFS
-func (f *localFS) ReadDir(name string) ([]fs.DirEntry, error) {
-	if !fs.ValidPath(name) {
-		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrInvalid}
-	}
-	return os.ReadDir(filepath.Join(f.root, name))
-}
-
-// Stat implements fs.StatFS
-func (f *localFS) Stat(name string) (fs.FileInfo, error) {
-	if !fs.ValidPath(name) {
-		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrInvalid}
-	}
-	return os.Stat(filepath.Join(f.root, name))
-}
-
-// Create creates or truncates the named file
-func (f *localFS) Create(name string) (File, error) {
-	if !fs.ValidPath(name) {
-		return nil, &fs.PathError{Op: "create", Path: name, Err: fs.ErrInvalid}
-	}
-	path := filepath.Join(f.root, name)
-	// Ensure parent directory exists
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	name, err := validatePath(name, "open")
+	if err != nil {
 		return nil, err
 	}
-	return os.Create(path)
+	file, err := os.Open(filepath.Join(f.root, name))
+	return file, fsErr(err, "open", name)
 }
 
-// MkdirAll creates a directory named path, along with any necessary parents
+func (f *localFS) ReadFile(name string) ([]byte, error) {
+	name, err := validatePath(name, "read")
+	if err != nil {
+		return nil, err
+	}
+	data, err := os.ReadFile(filepath.Join(f.root, name))
+	return data, fsErr(err, "read", name)
+}
+
+func (f *localFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	name, err := validatePath(name, "readdir")
+	if err != nil {
+		return nil, err
+	}
+	entries, err := os.ReadDir(filepath.Join(f.root, name))
+	return entries, fsErr(err, "readdir", name)
+}
+
+func (f *localFS) Stat(name string) (fs.FileInfo, error) {
+	name, err := validatePath(name, "stat")
+	if err != nil {
+		return nil, err
+	}
+	info, err := os.Stat(filepath.Join(f.root, name))
+	return info, fsErr(err, "stat", name)
+}
+
+func (f *localFS) Create(name string) (File, error) {
+	name, err := validatePath(name, "create")
+	if err != nil {
+		return nil, err
+	}
+	path := filepath.Join(f.root, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return nil, fsErr(err, "create", name)
+	}
+	file, err := os.Create(path)
+	return file, fsErr(err, "create", name)
+}
+
 func (f *localFS) MkdirAll(path string, perm os.FileMode) error {
-	if !fs.ValidPath(path) {
-		return &fs.PathError{Op: "mkdir", Path: path, Err: fs.ErrInvalid}
+	path, err := validatePath(path, "mkdir")
+	if err != nil {
+		return err
 	}
-	return os.MkdirAll(filepath.Join(f.root, path), perm)
+	return fsErr(os.MkdirAll(filepath.Join(f.root, path), perm), "mkdir", path)
 }
 
-// RemoveAll removes path and any children it contains
 func (f *localFS) RemoveAll(path string) error {
-	if !fs.ValidPath(path) {
-		return &fs.PathError{Op: "remove", Path: path, Err: fs.ErrInvalid}
+	path, err := validatePath(path, "remove")
+	if err != nil {
+		return err
 	}
-	return os.RemoveAll(filepath.Join(f.root, path))
+	return fsErr(os.RemoveAll(filepath.Join(f.root, path)), "remove", path)
 }
 
-// Rename renames (moves) oldname to newname
 func (f *localFS) Rename(oldname, newname string) error {
-	if !fs.ValidPath(oldname) {
-		return &fs.PathError{Op: "rename", Path: oldname, Err: fs.ErrInvalid}
+	oldname, err := validatePath(oldname, "rename")
+	if err != nil {
+		return err
 	}
-	if !fs.ValidPath(newname) {
-		return &fs.PathError{Op: "rename", Path: newname, Err: fs.ErrInvalid}
+	newname, err = validatePath(newname, "rename")
+	if err != nil {
+		return err
 	}
 	oldPath := filepath.Join(f.root, oldname)
 	newPath := filepath.Join(f.root, newname)
-	// Ensure parent directory of newname exists
 	if err := os.MkdirAll(filepath.Dir(newPath), 0755); err != nil {
-		return err
+		return fsErr(err, "rename", oldname)
 	}
-	return os.Rename(oldPath, newPath)
+	return fsErr(os.Rename(oldPath, newPath), "rename", oldname)
 }
 
-// WriteFile writes data to the named file, creating it if necessary
 func (f *localFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
-	if !fs.ValidPath(name) {
-		return &fs.PathError{Op: "write", Path: name, Err: fs.ErrInvalid}
-	}
-	path := filepath.Join(f.root, name)
-	// Ensure parent directory exists
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	name, err := validatePath(name, "write")
+	if err != nil {
 		return err
 	}
-	return os.WriteFile(path, data, perm)
+	path := filepath.Join(f.root, name)
+	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+		return fsErr(err, "write", name)
+	}
+	return fsErr(os.WriteFile(path, data, perm), "write", name)
 }

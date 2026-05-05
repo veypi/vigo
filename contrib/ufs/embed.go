@@ -34,13 +34,30 @@ func NewEmbedFS(efs fs.FS, prefix string) (ReadOnlyFS, error) {
 	return &embedFS{fs: root}, nil
 }
 
+// ReadFile implements FS.ReadFile
+func (f *embedFS) ReadFile(name string) ([]byte, error) {
+	name, err := validatePath(name, "read")
+	if err != nil {
+		return nil, err
+	}
+	return fs.ReadFile(f.fs, name)
+}
+
 // Open implements fs.FS
 func (f *embedFS) Open(name string) (fs.File, error) {
+	name, err := validatePath(name, "open")
+	if err != nil {
+		return nil, err
+	}
 	return f.fs.Open(name)
 }
 
 // ReadDir implements fs.ReadDirFS
 func (f *embedFS) ReadDir(name string) ([]fs.DirEntry, error) {
+	name, err := validatePath(name, "readdir")
+	if err != nil {
+		return nil, err
+	}
 	if rdfs, ok := f.fs.(fs.ReadDirFS); ok {
 		return rdfs.ReadDir(name)
 	}
@@ -59,6 +76,10 @@ func (f *embedFS) ReadDir(name string) ([]fs.DirEntry, error) {
 
 // Stat implements fs.StatFS
 func (f *embedFS) Stat(name string) (fs.FileInfo, error) {
+	name, err := validatePath(name, "stat")
+	if err != nil {
+		return nil, err
+	}
 	if sfs, ok := f.fs.(fs.StatFS); ok {
 		return sfs.Stat(name)
 	}

@@ -31,10 +31,29 @@ func NewMultiFS(layers ...fs.FS) ReadOnlyFS {
 	return &multiFS{layers: validLayers}
 }
 
+// ReadFile implements FS.ReadFile
+func (f *multiFS) ReadFile(name string) ([]byte, error) {
+	name, err := validatePath(name, "read")
+	if err != nil {
+		return nil, err
+	}
+	for _, layer := range f.layers {
+		data, err := fs.ReadFile(layer, name)
+		if err == nil {
+			return data, nil
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return nil, err
+		}
+	}
+	return nil, &fs.PathError{Op: "read", Path: name, Err: fs.ErrNotExist}
+}
+
 // Open implements fs.FS
 func (f *multiFS) Open(name string) (fs.File, error) {
-	if !fs.ValidPath(name) {
-		return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrInvalid}
+	name, err := validatePath(name, "open")
+	if err != nil {
+		return nil, err
 	}
 
 	var firstNotExistErr error
@@ -61,8 +80,9 @@ func (f *multiFS) Open(name string) (fs.File, error) {
 
 // ReadDir implements fs.ReadDirFS
 func (f *multiFS) ReadDir(name string) ([]fs.DirEntry, error) {
-	if !fs.ValidPath(name) {
-		return nil, &fs.PathError{Op: "readdir", Path: name, Err: fs.ErrInvalid}
+	name, err := validatePath(name, "readdir")
+	if err != nil {
+		return nil, err
 	}
 
 	var firstNotExistErr error
@@ -122,8 +142,9 @@ func (f *multiFS) ReadDir(name string) ([]fs.DirEntry, error) {
 
 // Stat implements fs.StatFS
 func (f *multiFS) Stat(name string) (fs.FileInfo, error) {
-	if !fs.ValidPath(name) {
-		return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrInvalid}
+	name, err := validatePath(name, "stat")
+	if err != nil {
+		return nil, err
 	}
 
 	var firstNotExistErr error

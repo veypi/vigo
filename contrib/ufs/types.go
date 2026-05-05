@@ -26,6 +26,8 @@ type FS interface {
 	fs.ReadDirFS
 	fs.StatFS
 
+	// ReadFile reads the named file and returns its contents.
+	ReadFile(name string) ([]byte, error)
 	// Create creates or truncates the named file.
 	Create(name string) (File, error)
 	// MkdirAll creates a directory named path, along with any necessary parents.
@@ -43,4 +45,7 @@ type ReadOnlyFS interface {
 	fs.FS
 	fs.ReadDirFS
 	fs.StatFS
+
+	// ReadFile reads the named file and returns its contents.
+	ReadFile(name string) ([]byte, error)
 }
