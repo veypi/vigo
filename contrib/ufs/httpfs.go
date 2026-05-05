@@ -629,7 +629,6 @@ func buildDirList(filesystem fs.FS, p string) ([]FileEntry, error) {
 		}
 		list = append(list, FileEntry{
 			Name:    e.Name(),
-			Path:    path.Join(p, e.Name()),
 			Dir:     e.IsDir(),
 			Size:    size,
 			ModTime: modTime,

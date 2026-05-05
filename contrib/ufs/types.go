@@ -43,7 +43,6 @@ type FS interface {
 // FileEntry describes a file or directory in a JSON directory listing.
 type FileEntry struct {
 	Name    string `json:"name"`
-	Path    string `json:"path"`
 	Dir     bool   `json:"dir"`
 	Size    int64  `json:"size"`
 	Mime    string `json:"mime"`

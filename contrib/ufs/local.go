@@ -54,7 +54,7 @@ type localFS struct {
 
 // NewLocalFS creates a new local file system with full read-write support
 func NewLocalFS(root string) (FS, error) {
-	if err := os.MkdirAll(root, 0755); err != nil {
+	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
 	}
 	return &localFS{root: root}, nil
@@ -102,7 +102,7 @@ func (f *localFS) Create(name string) (File, error) {
 		return nil, err
 	}
 	path := filepath.Join(f.root, name)
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fsErr(err, "create", name)
 	}
 	file, err := os.Create(path)
@@ -136,7 +136,7 @@ func (f *localFS) Rename(oldname, newname string) error {
 	}
 	oldPath := filepath.Join(f.root, oldname)
 	newPath := filepath.Join(f.root, newname)
-	if err := os.MkdirAll(filepath.Dir(newPath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(newPath), 0o755); err != nil {
 		return fsErr(err, "rename", oldname)
 	}
 	return fsErr(os.Rename(oldPath, newPath), "rename", oldname)
@@ -148,7 +148,7 @@ func (f *localFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 		return err
 	}
 	path := filepath.Join(f.root, name)
-	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fsErr(err, "write", name)
 	}
 	return fsErr(os.WriteFile(path, data, perm), "write", name)
