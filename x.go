@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"sync"
 
 	"github.com/veypi/vigo/logv"
@@ -75,9 +76,9 @@ func (x *X) Next() {
 		if e := recover(); e != nil {
 			switch e := e.(type) {
 			case error:
-				x.handleErr(e)
+				x.handleErr(fmt.Errorf("panic: %w\n%s", e, debug.Stack()))
 			default:
-				x.handleErr(fmt.Errorf("%v", e))
+				x.handleErr(fmt.Errorf("panic: %v\n%s", e, debug.Stack()))
 			}
 		}
 	}()
