@@ -101,12 +101,21 @@ func (app *Application) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !app.config.DisableReqLog {
 		start := nanotime()
 		defer func() {
-			logv.WithNoCaller.Debug().
-				Str("request_id", reqID).
-				Int("status", rw.StatusCode()).
-				Int64("ms", (nanotime()-start)/1e6).
-				Str("method", r.Method).
-				Msg(r.RequestURI)
+			if rw.StatusCode() >= 400 {
+				logv.WithNoCaller.Warn().
+					Str("request_id", reqID).
+					Int("status", rw.StatusCode()).
+					Int64("ms", (nanotime()-start)/1e6).
+					Str("method", r.Method).
+					Msg(r.RequestURI)
+			} else {
+				logv.WithNoCaller.Debug().
+					Str("request_id", reqID).
+					Int("status", rw.StatusCode()).
+					Int64("ms", (nanotime()-start)/1e6).
+					Str("method", r.Method).
+					Msg(r.RequestURI)
+			}
 		}()
 	}
 	if len(app.muxs) == 0 {
