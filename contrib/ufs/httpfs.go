@@ -460,7 +460,7 @@ func handlePut(x *vigo.X, filesystem FS, options *RWOptions) {
 		return
 	}
 
-	if err := filesystem.WriteFile(p, body, 0644); err != nil {
+	if err := filesystem.WriteFile(p, body, 0o644); err != nil {
 		if errors.Is(err, fs.ErrPermission) {
 			x.WriteHeader(http.StatusForbidden)
 			return
@@ -512,7 +512,7 @@ func handleMkcol(x *vigo.X, filesystem FS, pf PathFunc) {
 		}
 	}
 
-	if err := filesystem.MkdirAll(p, 0755); err != nil {
+	if err := filesystem.MkdirAll(p, 0o755); err != nil {
 		if errors.Is(err, fs.ErrPermission) {
 			x.WriteHeader(http.StatusForbidden)
 			return
@@ -752,10 +752,10 @@ func serveDefaultFileHead(x *vigo.X, filesystem fs.FS, df *defaultFileInfo, opti
 //   - Last-Modified: File modification time
 //   - 304 Not Modified: Returned when If-None-Match or If-Modified-Since match
 //   - Cache-Control: Configurable via HandlerOptions
-func NewHandler(filesystem fs.FS, opts ...*HandlerOptions) func(*vigo.X) {
+func NewHandler(fsLoader *fs.FS, opts ...*HandlerOptions) func(*vigo.X) {
 	options := mergeOptions(opts)
 	return func(x *vigo.X) {
-		handleGet(x, filesystem, options)
+		handleGet(x, *fsLoader, options)
 	}
 }
 
@@ -791,10 +791,11 @@ func NewHandlerWithDefault(filesystem fs.FS, defaultPath string, opts ...*Handle
 //   - OPTIONS: Returns Allow header
 //
 // Write operations can be individually disabled via RWOptions.
-func NewRWHandler(filesystem FS, opts ...*RWOptions) func(*vigo.X) {
+func NewRWHandler(fsLoader *FS, opts ...*RWOptions) func(*vigo.X) {
 	options := mergeRWOptions(opts)
 
 	return func(x *vigo.X) {
+		filesystem := *fsLoader
 		switch x.Request.Method {
 		case http.MethodGet:
 			handleGet(x, filesystem, &options.HandlerOptions)
