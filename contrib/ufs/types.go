@@ -40,6 +40,16 @@ type FS interface {
 	WriteFile(name string, data []byte, perm fs.FileMode) error
 }
 
+// FileEntry describes a file or directory in a JSON directory listing.
+type FileEntry struct {
+	Name    string `json:"name"`
+	Path    string `json:"path"`
+	Dir     bool   `json:"dir"`
+	Size    int64  `json:"size"`
+	Mime    string `json:"mime"`
+	ModTime int64  `json:"mod_time"`
+}
+
 // ReadOnlyFS 只读文件系统接口
 type ReadOnlyFS interface {
 	fs.FS

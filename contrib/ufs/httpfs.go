@@ -23,15 +23,6 @@ import (
 	"github.com/veypi/vigo/logv"
 )
 
-// fileEntry describes a file or directory in a JSON directory listing.
-type fileEntry struct {
-	Name    string `json:"name"`
-	Dir     bool   `json:"dir"`
-	Size    int64  `json:"size"`
-	Mime    string `json:"mime"`
-	ModTime int64  `json:"mod_time"`
-}
-
 // defaultFileInfo holds pre-computed metadata for a default/fallback file.
 type defaultFileInfo struct {
 	path    string
@@ -154,14 +145,16 @@ func mergeRWOptions(opts []*RWOptions) *RWOptions {
 		if opt.PathFunc != nil {
 			result.PathFunc = opt.PathFunc
 		}
-		result.AllowPut = opt.AllowPut
-		result.AllowDelete = opt.AllowDelete
-		result.AllowMkdir = opt.AllowMkdir
-		result.AllowRename = opt.AllowRename
 		if opt.MaxFileSize > 0 {
 			result.MaxFileSize = opt.MaxFileSize
 		} else if opt.MaxFileSize < 0 {
 			result.MaxFileSize = 0
+		}
+		if opt.AllowPut || opt.AllowDelete || opt.AllowMkdir || opt.AllowRename {
+			result.AllowPut = opt.AllowPut
+			result.AllowDelete = opt.AllowDelete
+			result.AllowMkdir = opt.AllowMkdir
+			result.AllowRename = opt.AllowRename
 		}
 	}
 	return result
@@ -615,13 +608,13 @@ func handleOptions(x *vigo.X, options *RWOptions) {
 // =============================================================================
 
 // buildDirList reads directory entries and returns a JSON-serializable list.
-func buildDirList(filesystem fs.FS, p string) ([]fileEntry, error) {
+func buildDirList(filesystem fs.FS, p string) ([]FileEntry, error) {
 	entries, err := readDir(filesystem, p)
 	if err != nil {
 		return nil, err
 	}
 
-	list := make([]fileEntry, 0, len(entries))
+	list := make([]FileEntry, 0, len(entries))
 	for _, e := range entries {
 		info, err := e.Info()
 		var size int64
@@ -634,8 +627,9 @@ func buildDirList(filesystem fs.FS, p string) ([]fileEntry, error) {
 				mimeType = mime.TypeByExtension(path.Ext(e.Name()))
 			}
 		}
-		list = append(list, fileEntry{
+		list = append(list, FileEntry{
 			Name:    e.Name(),
+			Path:    path.Join(p, e.Name()),
 			Dir:     e.IsDir(),
 			Size:    size,
 			ModTime: modTime,
