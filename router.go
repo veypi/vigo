@@ -46,10 +46,13 @@ type Router interface {
 	SubRouter(prefix string) Router
 	String() string
 
-	// Doc returns the API documentation structure
+	// Doc returns the API documentation structure with paths relative to this router.
 	Doc() *Doc
 	// SetDoc overrides or supplements the request/response schema for a specific route and method.
 	SetDoc(url string, method string, args any, response any) Router
+	// EnableApiDoc registers _api and _api.json routes on this router.
+	// Doc paths are relative to this router.
+	EnableApiDoc() Router
 
 	Clear(url string, method string)
 	SetVar(key string, value any) Router

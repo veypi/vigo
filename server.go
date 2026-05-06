@@ -25,9 +25,8 @@ import (
 
 func NewServer(opts ...func(*Config)) (*Application, error) {
 	c := &Config{
-		Host:    "0.0.0.0",
-		Port:    8000,
-		DocPath: "_api",
+		Host: "0.0.0.0",
+		Port: 8000,
 	}
 	for _, opt := range opts {
 		opt(c)
@@ -140,7 +139,6 @@ func (app *Application) SetRouter(r Router) {
 }
 
 func (app *Application) Run() error {
-	app.EnableApiDoc()
 	l, e := app.netListener()
 	if e != nil {
 		return e

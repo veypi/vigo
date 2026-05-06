@@ -152,9 +152,10 @@ func (r *Redis) Client() *redis.Client {
 			})
 		} else {
 			r.client = redis.NewClient(&redis.Options{
-				Addr:     r.Addr,
-				Password: r.Password,
-				DB:       r.DB,
+				Addr:            r.Addr,
+				Password:        r.Password,
+				DB:              r.DB,
+				MaxRetries:      2,
 			})
 		}
 		if r.Prefix != "" {

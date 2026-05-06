@@ -4,7 +4,6 @@ import (
 	_ "embed"
 	"encoding/json"
 	"mime/multipart"
-	"path/filepath"
 	"reflect"
 	"runtime"
 	"strings"
@@ -96,57 +95,56 @@ type DocJsonRequest struct {
 	Mode   *string `src:"query" json:"mode" desc:"mode: simple(default)|full|debug"`
 }
 
-func (app *Application) EnableApiDoc() {
-	if app.config.DocPath != "" {
-		_ = app.Router().Get(app.config.DocPath+".json", "get server api documentation", func(x *X, arg *DocJsonRequest) error {
-			res := app.Router().Doc()
+// EnableApiDoc registers _api and _api.json routes on this router.
+// The returned API doc contains paths relative to this router.
+func (r *route) EnableApiDoc() Router {
+	_ = r.Get("_api.json", "get api documentation", SkipBefore, func(x *X, arg *DocJsonRequest) error {
+		res := r.Doc()
 
-			// Filter
-			if arg.Prefix != nil || arg.Method != nil || arg.Query != nil || arg.Path != nil {
-				filtered := make([]*DocRoute, 0, len(res.Routes))
-				for _, r := range res.Routes {
-					if arg.Prefix != nil && !strings.HasPrefix(r.Path, *arg.Prefix) {
-						continue
-					}
-					if arg.Query != nil && !strings.Contains(r.Path, *arg.Query) {
-						continue
-					}
-					if arg.Path != nil && r.Path != *arg.Path {
-						continue
-					}
-					if arg.Method != nil && !strings.EqualFold(r.Method, *arg.Method) {
-						continue
-					}
-					filtered = append(filtered, r)
-				}
-				res.Routes = filtered
-			}
-
-			// Mode
-			mode := "simple"
-			if arg.Mode != nil {
-				mode = *arg.Mode
-			}
+		// Filter
+		if arg.Prefix != nil || arg.Method != nil || arg.Query != nil || arg.Path != nil {
+			filtered := make([]*DocRoute, 0, len(res.Routes))
 			for _, r := range res.Routes {
-				if mode != "debug" {
-					r.Actions = nil
+				if arg.Prefix != nil && !strings.HasPrefix(r.Path, *arg.Prefix) {
+					continue
 				}
-				if mode == "simple" {
-					r.Params = nil
-					r.Body = nil
-					r.Response = nil
+				if arg.Query != nil && !strings.Contains(r.Path, *arg.Query) {
+					continue
 				}
+				if arg.Path != nil && r.Path != *arg.Path {
+					continue
+				}
+				if arg.Method != nil && !strings.EqualFold(r.Method, *arg.Method) {
+					continue
+				}
+				filtered = append(filtered, r)
 			}
+			res.Routes = filtered
+		}
 
-			x.Stop()
-			return x.JSON(res)
-		})
-		_ = app.Router().Get(app.config.DocPath, func(x *X) error {
-			x.Stop()
-			jsonPath := "./" + filepath.Base(app.config.DocPath) + ".json"
-			return x.HTMLTemplate(docTemplate, jsonPath)
-		})
-	}
+		// Mode
+		mode := "simple"
+		if arg.Mode != nil {
+			mode = *arg.Mode
+		}
+		for _, r := range res.Routes {
+			if mode != "debug" {
+				r.Actions = nil
+			}
+			if mode == "simple" {
+				r.Params = nil
+				r.Body = nil
+				r.Response = nil
+			}
+		}
+
+		x.Stop()
+		return x.JSON(res)
+	}, Stop)
+	_ = r.Get("_api", SkipBefore, func(x *X) error {
+		return x.HTMLTemplate(docTemplate, "./_api.json")
+	}, Stop)
+	return r
 }
 
 //go:embed doc.html
@@ -160,101 +158,103 @@ func (r *route) Doc() *Doc {
 		Routes:  make([]*DocRoute, 0),
 	}
 
+	// processMethods builds DocRoute entries from a single node's registered methods.
+	processMethods := func(node *route, path string) {
+		for method, mh := range node.methods {
+			if mh.Desc == "" {
+				continue
+			}
+			route := &DocRoute{
+				Method:  method,
+				Path:    path,
+				Summary: mh.Desc,
+			}
+
+			if handlersInfo, ok := node.handlersInfoCache[method]; ok {
+				for _, info := range handlersInfo {
+					if info == nil {
+						continue
+					}
+					val := reflect.ValueOf(info.Func)
+					name := ""
+					if val.Kind() == reflect.Func {
+						op := val.Pointer()
+						fn := runtime.FuncForPC(op)
+						if fn != nil {
+							name = fn.Name()
+						}
+					}
+					route.Actions = append(route.Actions, &DocAction{
+						Name:   name,
+						File:   info.File,
+						Line:   info.Line,
+						Scoped: info.Scoped,
+					})
+				}
+			} else if handlers, ok := node.handlersCache[method]; ok {
+				for _, h := range handlers {
+					if _, ok := h.(string); ok {
+						continue
+					}
+					val := reflect.ValueOf(h)
+					if val.Kind() == reflect.Func {
+						op := val.Pointer()
+						fn := runtime.FuncForPC(op)
+						if fn != nil {
+							file, line := fn.FileLine(op)
+							route.Actions = append(route.Actions, &DocAction{
+								Name: fn.Name(),
+								File: file,
+								Line: line,
+							})
+						}
+					}
+				}
+			}
+
+			// Parse Request
+			if mh.Args != nil {
+				if t, ok := mh.Args.(reflect.Type); ok {
+					route.Params, route.Body = parseDocArgs(t)
+				} else {
+					route.Params, route.Body = parseDocArgs(reflect.TypeOf(mh.Args))
+				}
+			}
+
+			// Parse Response
+			if mh.Response != nil {
+				if t, ok := mh.Response.(reflect.Type); ok {
+					route.Response = parseDocResponse(t)
+				} else {
+					route.Response = parseDocResponse(reflect.TypeOf(mh.Response))
+				}
+			}
+
+			doc.Routes = append(doc.Routes, route)
+		}
+	}
+
 	var traverse func(node *route, prefix string)
 	traverse = func(node *route, prefix string) {
 		currentPath := prefix
 		if node.fragment != "" {
 			currentPath += "/" + node.fragment
 		}
-		// Clean up double slashes just in case
 		currentPath = strings.ReplaceAll(currentPath, "//", "/")
 
-		if len(node.methods) > 0 {
-			// Process methods
-			for method, mh := range node.methods {
-				if mh.Desc == "" {
-					continue
-				}
-				route := &DocRoute{
-					Method:  method,
-					Path:    currentPath,
-					Summary: mh.Desc,
-				}
+		processMethods(node, currentPath)
 
-				if handlersInfo, ok := node.handlersInfoCache[method]; ok {
-					for _, info := range handlersInfo {
-						if info == nil {
-							continue
-						}
-						val := reflect.ValueOf(info.Func)
-						name := ""
-						if val.Kind() == reflect.Func {
-							op := val.Pointer()
-							fn := runtime.FuncForPC(op)
-							if fn != nil {
-								name = fn.Name()
-							}
-						}
-
-						route.Actions = append(route.Actions, &DocAction{
-							Name:   name,
-							File:   info.File,
-							Line:   info.Line,
-							Scoped: info.Scoped,
-						})
-					}
-				} else if handlers, ok := node.handlersCache[method]; ok {
-					for _, h := range handlers {
-						if _, ok := h.(string); ok {
-							continue
-						}
-						val := reflect.ValueOf(h)
-						if val.Kind() == reflect.Func {
-							op := val.Pointer()
-							fn := runtime.FuncForPC(op)
-							if fn != nil {
-								file, line := fn.FileLine(op)
-								route.Actions = append(route.Actions, &DocAction{
-									Name: fn.Name(),
-									File: file,
-									Line: line,
-								})
-							}
-						}
-					}
-				}
-
-				// Parse Request
-				if mh.Args != nil {
-					// Check if it's already reflect.Type
-					if t, ok := mh.Args.(reflect.Type); ok {
-						route.Params, route.Body = parseDocArgs(t)
-					} else {
-						// Assume it's an instance or struct
-						route.Params, route.Body = parseDocArgs(reflect.TypeOf(mh.Args))
-					}
-				}
-
-				// Parse Response (Only 200 OK)
-				if mh.Response != nil {
-					if t, ok := mh.Response.(reflect.Type); ok {
-						route.Response = parseDocResponse(t)
-					} else {
-						route.Response = parseDocResponse(reflect.TypeOf(mh.Response))
-					}
-				}
-
-				doc.Routes = append(doc.Routes, route)
-			}
-		}
-
-		// Traverse children
 		for _, child := range node.children {
 			traverse(child, currentPath)
 		}
 	}
 
-	traverse(r, "")
+	// Process r's own methods (path "/") and traverse children relative to r.
+	processMethods(r, "/")
+	for _, child := range r.children {
+		traverse(child, "")
+	}
+
 	return doc
 }
 

@@ -19,8 +19,7 @@ import (
 var ipv4Regex = regexp.MustCompile(`^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])\.){3}(25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-9])$`)
 
 type Config struct {
-	DocPath string `json:"doc_path,omitempty"`
-	Host    string `json:"host"`
+	Host string `json:"host"`
 	Port    int    `json:"port"`
 	// log file path
 	LoggerPath        string        `json:"logger_path,omitempty"`
@@ -95,12 +94,6 @@ func isHostname(host string) bool {
 func WithTls(cfg *tls.Config) func(*Config) {
 	return func(c *Config) {
 		c.TlsCfg = cfg
-	}
-}
-
-func WithDocPath(path string) func(*Config) {
-	return func(c *Config) {
-		c.DocPath = path
 	}
 }
 
