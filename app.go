@@ -30,15 +30,39 @@ type App[T any] interface {
 	Config() T
 	// 初始化函数
 	Init() error
+	// 退出函数
+	Exit()
 	Run() error
 }
 
-func New[T any](name string, router Router, config T, init func() error) App[T] {
+type appOptions struct {
+	init func() error
+	exit func()
+}
+
+func WithInit(fn func() error) func(*appOptions) {
+	return func(o *appOptions) {
+		o.init = fn
+	}
+}
+
+func WithExit(fn func()) func(*appOptions) {
+	return func(o *appOptions) {
+		o.exit = fn
+	}
+}
+
+func New[T any](name string, router Router, config T, opts ...func(*appOptions)) App[T] {
+	o := &appOptions{}
+	for _, opt := range opts {
+		opt(o)
+	}
 	return &app[T]{
 		router: router,
 		name:   name,
 		cfg:    config,
-		init:   init,
+		init:   o.init,
+		exit:   o.exit,
 	}
 }
 
@@ -47,6 +71,7 @@ type app[T any] struct {
 	name   string
 	cfg    T
 	init   func() error
+	exit   func()
 }
 
 func (a *app[T]) Router() Router {
@@ -66,6 +91,12 @@ func (a *app[T]) Init() error {
 		return a.init()
 	}
 	return nil
+}
+
+func (a *app[T]) Exit() {
+	if a.exit != nil {
+		a.exit()
+	}
 }
 
 func (a *app[T]) Run() error {
@@ -110,10 +141,11 @@ func (a *app[T]) Run() error {
 	}
 	cmdMain.AutoRegister(a.Config())
 	cmdMain.Command = func() error {
-		err := a.init()
+		err := a.Init()
 		if err != nil {
 			return err
 		}
+		defer a.Exit()
 		event.Start()
 		server, err := NewServer(WithHost(*host), WithPort(*port))
 		if err != nil {

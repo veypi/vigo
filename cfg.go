@@ -20,7 +20,7 @@ var ipv4Regex = regexp.MustCompile(`^((25[0-5]|2[0-4][0-9]|1[0-9][0-9]|[1-9]?[0-
 
 type Config struct {
 	Host string `json:"host"`
-	Port    int    `json:"port"`
+	Port int    `json:"port"`
 	// log file path
 	LoggerPath        string        `json:"logger_path,omitempty"`
 	LoggerLevel       string        `json:"logger_level,omitempty"`
@@ -53,7 +53,7 @@ func (c *Config) IsValid() error {
 	}
 	// 超时配置默认为 0（无限制），由使用者自行设置
 	if c.ShutdownTimeout <= 0 {
-		c.ShutdownTimeout = 10 * time.Second
+		c.ShutdownTimeout = 3 * time.Second
 	}
 	if c.MaxHeaderBytes <= 0 {
 		c.MaxHeaderBytes = 1 << 20
