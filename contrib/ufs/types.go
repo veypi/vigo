@@ -47,6 +47,19 @@ type FileEntry struct {
 	Size    int64  `json:"size"`
 	Mime    string `json:"mime"`
 	ModTime int64  `json:"mod_time"`
+	IsRepo  bool   `json:"is_repo"`
+}
+
+// DirEntry describes a directory with its children.
+// Fields match FileEntry, with an additional Items field for the child list.
+type DirEntry struct {
+	Name    string      `json:"name"`
+	Dir     bool        `json:"dir"`
+	Size    int64       `json:"size"`
+	Mime    string      `json:"mime"`
+	ModTime int64       `json:"mod_time"`
+	IsRepo  bool        `json:"is_repo"`
+	Items   []FileEntry `json:"items"`
 }
 
 // ReadOnlyFS 只读文件系统接口

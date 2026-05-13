@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"path"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/veypi/vigo"
@@ -79,7 +80,7 @@ type RWOptions struct {
 	// AllowDelete enables DELETE method for file/directory removal
 	AllowDelete bool
 
-	// AllowMkdir enables MKCOL method for directory creation
+	// AllowMkdir enables POST method for directory creation
 	AllowMkdir bool
 
 	// AllowRename enables PATCH method for rename/move
@@ -193,6 +194,11 @@ func setCacheHeaders(w http.ResponseWriter, etag string, modTime time.Time, cach
 	w.Header().Set("Cache-Control", cacheControl)
 }
 
+// skipFallback returns true when the request carries the X-No-Fallback header.
+func skipFallback(x *vigo.X) bool {
+	return x.Request.Header.Get("X-No-Fallback") != ""
+}
+
 // =============================================================================
 // Internal: GET / HEAD handlers
 // =============================================================================
@@ -227,7 +233,7 @@ func handleGet(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 	}
 
 	if stat.IsDir() {
-		serveDirList(x, filesystem, p)
+		serveDirList(x, filesystem, p, stat)
 		return
 	}
 
@@ -256,11 +262,7 @@ func handleGetWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions, 
 
 	file, err := filesystem.Open(p)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) && df != nil {
-			if path.Ext(p) != "" {
-				x.WriteHeader(http.StatusNotFound)
-				return
-			}
+		if errors.Is(err, fs.ErrNotExist) && df != nil && !skipFallback(x) {
 			serveDefaultFile(x, filesystem, df, options)
 			return
 		}
@@ -284,11 +286,11 @@ func handleGetWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions, 
 	}
 
 	if stat.IsDir() {
-		if df != nil {
+		if df != nil && !skipFallback(x) {
 			serveDefaultFile(x, filesystem, df, options)
 			return
 		}
-		serveDirList(x, filesystem, p)
+		serveDirList(x, filesystem, p, stat)
 		return
 	}
 
@@ -337,7 +339,7 @@ func handleHead(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 	}
 
 	if stat.IsDir() {
-		serveDirListHead(x, filesystem, p)
+		serveDirListHead(x, filesystem, p, stat)
 		return
 	}
 
@@ -366,11 +368,7 @@ func handleHeadWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions,
 
 	file, err := filesystem.Open(p)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) && df != nil {
-			if path.Ext(p) != "" {
-				x.WriteHeader(http.StatusNotFound)
-				return
-			}
+		if errors.Is(err, fs.ErrNotExist) && df != nil && !skipFallback(x) {
 			serveDefaultFileHead(x, filesystem, df, options)
 			return
 		}
@@ -394,11 +392,11 @@ func handleHeadWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions,
 	}
 
 	if stat.IsDir() {
-		if df != nil {
+		if df != nil && !skipFallback(x) {
 			serveDefaultFileHead(x, filesystem, df, options)
 			return
 		}
-		serveDirListHead(x, filesystem, p)
+		serveDirListHead(x, filesystem, p, stat)
 		return
 	}
 
@@ -594,7 +592,7 @@ func handleOptions(x *vigo.X, options *RWOptions) {
 		methods += ", DELETE"
 	}
 	if options.AllowMkdir {
-		methods += ", MKCOL"
+		methods += ", POST"
 	}
 	if options.AllowRename {
 		methods += ", PATCH"
@@ -607,55 +605,85 @@ func handleOptions(x *vigo.X, options *RWOptions) {
 // Directory listing helpers
 // =============================================================================
 
-// buildDirList reads directory entries and returns a JSON-serializable list.
-func buildDirList(filesystem fs.FS, p string) ([]FileEntry, error) {
+// isGitRepo checks if the directory at p contains a .git subdirectory.
+func isGitRepo(filesystem fs.FS, p string) bool {
+	if statFS, ok := filesystem.(fs.StatFS); ok {
+		info, err := statFS.Stat(path.Join(p, ".git"))
+		return err == nil && info.IsDir()
+	}
+	f, err := filesystem.Open(path.Join(p, ".git"))
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	info, err := f.Stat()
+	return err == nil && info.IsDir()
+}
+
+// buildDirEntry builds a DirEntry for the directory at p.
+func buildDirEntry(filesystem fs.FS, p string, stat fs.FileInfo) (*DirEntry, error) {
 	entries, err := readDir(filesystem, p)
 	if err != nil {
 		return nil, err
 	}
 
-	list := make([]FileEntry, 0, len(entries))
+	items := make([]FileEntry, 0, len(entries))
 	for _, e := range entries {
+		if len(e.Name()) > 0 && e.Name()[0] == '.' {
+			continue
+		}
 		info, err := e.Info()
 		var size int64
 		var modTime int64
 		var mimeType string
+		var isRepo bool
 		if err == nil {
 			size = info.Size()
 			modTime = info.ModTime().Unix()
-			if !e.IsDir() {
+			if e.IsDir() {
+				isRepo = isGitRepo(filesystem, path.Join(p, e.Name()))
+			} else {
 				mimeType = mime.TypeByExtension(path.Ext(e.Name()))
 			}
 		}
-		list = append(list, FileEntry{
+		items = append(items, FileEntry{
 			Name:    e.Name(),
 			Dir:     e.IsDir(),
 			Size:    size,
 			ModTime: modTime,
 			Mime:    mimeType,
+			IsRepo:  isRepo,
 		})
 	}
-	return list, nil
+
+	return &DirEntry{
+		Name:    stat.Name(),
+		Dir:     true,
+		Size:    stat.Size(),
+		ModTime: stat.ModTime().Unix(),
+		IsRepo:  isGitRepo(filesystem, p),
+		Items:   items,
+	}, nil
 }
 
 // serveDirList writes a JSON directory listing to the response.
-func serveDirList(x *vigo.X, filesystem fs.FS, p string) {
-	list, err := buildDirList(filesystem, p)
+func serveDirList(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo) {
+	entry, err := buildDirEntry(filesystem, p, stat)
 	if err != nil {
 		x.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	x.JSON(list)
+	x.JSON(entry)
 }
 
 // serveDirListHead sets headers for a directory listing without writing the body.
-func serveDirListHead(x *vigo.X, filesystem fs.FS, p string) {
-	list, err := buildDirList(filesystem, p)
+func serveDirListHead(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo) {
+	entry, err := buildDirEntry(filesystem, p, stat)
 	if err != nil {
 		x.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-	data, _ := json.Marshal(list)
+	data, _ := json.Marshal(entry)
 	x.Header().Set("Content-Type", "application/json")
 	x.Header().Set("Content-Length", strconv.Itoa(len(data)))
 	x.WriteHeader(http.StatusOK)
@@ -754,19 +782,23 @@ func NewHandler(fsLoader *fs.FS, opts ...*HandlerOptions) func(*vigo.X) {
 
 // NewHandlerWithDefault returns a vigo handler with a default file fallback.
 // If the requested path is not found or is a directory, the default file is served.
-// The default file is read on-demand at runtime (not pre-loaded into memory).
+// The default file is resolved lazily on the first request.
 //
 // HTTP Cache Support:
 //   - ETag: Generated from file size and modification time (or from ETagCache if provided)
 //   - Last-Modified: File modification time
 //   - 304 Not Modified: Returned when If-None-Match or If-Modified-Since match
 //   - Cache-Control: Configurable via HandlerOptions
-func NewHandlerWithDefault(filesystem fs.FS, defaultPath string, opts ...*HandlerOptions) func(*vigo.X) {
+func NewHandlerWithDefault(filesystem *fs.FS, defaultPath string, opts ...*HandlerOptions) func(*vigo.X) {
 	options := mergeOptions(opts)
-	df := resolveDefaultFileInfo(filesystem, defaultPath, options)
+	var df *defaultFileInfo
+	var dfOnce sync.Once
 
 	return func(x *vigo.X) {
-		handleGetWithDefault(x, filesystem, options, df)
+		dfOnce.Do(func() {
+			df = resolveDefaultFileInfo(*filesystem, defaultPath, options)
+		})
+		handleGetWithDefault(x, *filesystem, options, df)
 	}
 }
 
@@ -779,7 +811,7 @@ func NewHandlerWithDefault(filesystem fs.FS, defaultPath string, opts ...*Handle
 //   - HEAD: Same as GET but returns headers only
 //   - PUT: Create/overwrite file (request body = file content)
 //   - DELETE: Remove file or directory
-//   - MKCOL: Create directory
+//   - POST: Create directory
 //   - PATCH: Rename/move (JSON body: {"action": "rename", "to": "/new/path"})
 //   - OPTIONS: Returns Allow header
 //
@@ -806,7 +838,7 @@ func NewRWHandler(fsLoader *FS, opts ...*RWOptions) func(*vigo.X) {
 				return
 			}
 			handleDelete(x, filesystem, options.PathFunc)
-		case "MKCOL":
+		case http.MethodPost:
 			if !options.AllowMkdir {
 				x.WriteHeader(http.StatusMethodNotAllowed)
 				return
@@ -829,40 +861,46 @@ func NewRWHandler(fsLoader *FS, opts ...*RWOptions) func(*vigo.X) {
 // NewRWHandlerWithDefault returns a vigo handler with full read/write support
 // and SPA-style fallback to a default file for GET/HEAD requests.
 // Write operations are not affected by the default file fallback.
-func NewRWHandlerWithDefault(filesystem FS, defaultPath string, opts ...*RWOptions) func(*vigo.X) {
+// The default file is resolved lazily on the first request.
+func NewRWHandlerWithDefault(filesystem *FS, defaultPath string, opts ...*RWOptions) func(*vigo.X) {
 	options := mergeRWOptions(opts)
-	df := resolveDefaultFileInfo(filesystem, defaultPath, &options.HandlerOptions)
+	var df *defaultFileInfo
+	var dfOnce sync.Once
 
 	return func(x *vigo.X) {
+		dfOnce.Do(func() {
+			df = resolveDefaultFileInfo(*filesystem, defaultPath, &options.HandlerOptions)
+		})
+		fs := *filesystem
 		switch x.Request.Method {
 		case http.MethodGet:
-			handleGetWithDefault(x, filesystem, &options.HandlerOptions, df)
+			handleGetWithDefault(x, fs, &options.HandlerOptions, df)
 		case http.MethodHead:
-			handleHeadWithDefault(x, filesystem, &options.HandlerOptions, df)
+			handleHeadWithDefault(x, fs, &options.HandlerOptions, df)
 		case http.MethodPut:
 			if !options.AllowPut {
 				x.WriteHeader(http.StatusMethodNotAllowed)
 				return
 			}
-			handlePut(x, filesystem, options)
+			handlePut(x, fs, options)
 		case http.MethodDelete:
 			if !options.AllowDelete {
 				x.WriteHeader(http.StatusMethodNotAllowed)
 				return
 			}
-			handleDelete(x, filesystem, options.PathFunc)
-		case "MKCOL":
+			handleDelete(x, fs, options.PathFunc)
+		case http.MethodPost:
 			if !options.AllowMkdir {
 				x.WriteHeader(http.StatusMethodNotAllowed)
 				return
 			}
-			handleMkcol(x, filesystem, options.PathFunc)
+			handleMkcol(x, fs, options.PathFunc)
 		case http.MethodPatch:
 			if !options.AllowRename {
 				x.WriteHeader(http.StatusMethodNotAllowed)
 				return
 			}
-			handlePatch(x, filesystem, options.PathFunc)
+			handlePatch(x, fs, options.PathFunc)
 		case http.MethodOptions:
 			handleOptions(x, options)
 		default:
