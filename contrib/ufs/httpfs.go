@@ -17,6 +17,7 @@ import (
 	"net/http"
 	"path"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,6 +69,15 @@ type HandlerOptions struct {
 	// PathFunc extracts the file path from the request context.
 	// Default: x.PathParams.Get("path")
 	PathFunc PathFunc
+
+	// MaxDepth controls the maximum directory listing depth (1-5).
+	// 0 means directory GET is disabled (returns 403 Forbidden).
+	// Default: 0
+	MaxDepth int
+
+	// AllowSearch enables the ?query= parameter for keyword-based file name search.
+	// Default: false
+	AllowSearch bool
 }
 
 // RWOptions configures the HTTP handler behavior for read/write operations.
@@ -126,6 +136,12 @@ func mergeOptions(opts []*HandlerOptions) *HandlerOptions {
 		if opt.PathFunc != nil {
 			result.PathFunc = opt.PathFunc
 		}
+		if opt.MaxDepth > 0 {
+			result.MaxDepth = opt.MaxDepth
+		}
+		if opt.AllowSearch {
+			result.AllowSearch = true
+		}
 	}
 	return result
 }
@@ -145,6 +161,12 @@ func mergeRWOptions(opts []*RWOptions) *RWOptions {
 		}
 		if opt.PathFunc != nil {
 			result.PathFunc = opt.PathFunc
+		}
+		if opt.MaxDepth > 0 {
+			result.MaxDepth = opt.MaxDepth
+		}
+		if opt.AllowSearch {
+			result.AllowSearch = true
 		}
 		if opt.MaxFileSize > 0 {
 			result.MaxFileSize = opt.MaxFileSize
@@ -233,7 +255,12 @@ func handleGet(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 	}
 
 	if stat.IsDir() {
-		serveDirList(x, filesystem, p, stat)
+		if options.MaxDepth <= 0 {
+			x.WriteHeader(http.StatusForbidden)
+			return
+		}
+		depth, query := parseListParams(x.Request, options)
+		serveDirList(x, filesystem, p, stat, depth, query)
 		return
 	}
 
@@ -290,7 +317,12 @@ func handleGetWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions, 
 			serveDefaultFile(x, filesystem, df, options)
 			return
 		}
-		serveDirList(x, filesystem, p, stat)
+		if options.MaxDepth <= 0 {
+			x.WriteHeader(http.StatusForbidden)
+			return
+		}
+		depth, query := parseListParams(x.Request, options)
+		serveDirList(x, filesystem, p, stat, depth, query)
 		return
 	}
 
@@ -339,7 +371,12 @@ func handleHead(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 	}
 
 	if stat.IsDir() {
-		serveDirListHead(x, filesystem, p, stat)
+		if options.MaxDepth <= 0 {
+			x.WriteHeader(http.StatusForbidden)
+			return
+		}
+		depth, query := parseListParams(x.Request, options)
+		serveDirListHead(x, filesystem, p, stat, depth, query)
 		return
 	}
 
@@ -396,7 +433,12 @@ func handleHeadWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions,
 			serveDefaultFileHead(x, filesystem, df, options)
 			return
 		}
-		serveDirListHead(x, filesystem, p, stat)
+		if options.MaxDepth <= 0 {
+			x.WriteHeader(http.StatusForbidden)
+			return
+		}
+		depth, query := parseListParams(x.Request, options)
+		serveDirListHead(x, filesystem, p, stat, depth, query)
 		return
 	}
 
@@ -620,14 +662,52 @@ func isGitRepo(filesystem fs.FS, p string) bool {
 	return err == nil && info.IsDir()
 }
 
-// buildDirEntry builds a DirEntry for the directory at p.
-func buildDirEntry(filesystem fs.FS, p string, stat fs.FileInfo) (*DirEntry, error) {
+// parseListParams extracts depth and query from the request query string.
+func parseListParams(r *http.Request, options *HandlerOptions) (depth int, query string) {
+	if options.MaxDepth <= 0 {
+		return 0, ""
+	}
+	q := r.URL.Query()
+	depth = 1
+	if d, err := strconv.Atoi(q.Get("depth")); err == nil {
+		depth = d
+	}
+	if depth < 1 {
+		depth = 1
+	}
+	if depth > options.MaxDepth {
+		depth = options.MaxDepth
+	}
+	if options.AllowSearch {
+		query = strings.ToLower(q.Get("query"))
+	}
+	return
+}
+
+// itemMatchesQuery checks if an ItemEntry or any of its descendants match the query.
+func itemMatchesQuery(item *ItemEntry, query string) bool {
+	if query == "" {
+		return true
+	}
+	if strings.Contains(strings.ToLower(item.Name), query) {
+		return true
+	}
+	for i := range item.Items {
+		if itemMatchesQuery(&item.Items[i], query) {
+			return true
+		}
+	}
+	return false
+}
+
+// buildItemTree builds an ItemEntry tree for the directory at p, recursing up to depth levels.
+func buildItemTree(filesystem fs.FS, p string, stat fs.FileInfo, depth int, query string) (*ItemEntry, error) {
 	entries, err := readDir(filesystem, p)
 	if err != nil {
 		return nil, err
 	}
 
-	items := make([]FileEntry, 0, len(entries))
+	items := make([]ItemEntry, 0, len(entries))
 	for _, e := range entries {
 		if len(e.Name()) > 0 && e.Name()[0] == '.' {
 			continue
@@ -646,17 +726,39 @@ func buildDirEntry(filesystem fs.FS, p string, stat fs.FileInfo) (*DirEntry, err
 				mimeType = mime.TypeByExtension(path.Ext(e.Name()))
 			}
 		}
-		items = append(items, FileEntry{
+
+		item := ItemEntry{
 			Name:    e.Name(),
 			Dir:     e.IsDir(),
 			Size:    size,
 			ModTime: modTime,
 			Mime:    mimeType,
 			IsRepo:  isRepo,
-		})
+		}
+
+		if e.IsDir() && depth > 1 {
+			subPath := path.Join(p, e.Name())
+			subFile, err := filesystem.Open(subPath)
+			if err == nil {
+				subStat, sErr := subFile.Stat()
+				subFile.Close()
+				if sErr == nil {
+					if subEntry, sErr := buildItemTree(filesystem, subPath, subStat, depth-1, query); sErr == nil {
+						item.Items = subEntry.Items
+					}
+				}
+			}
+			if query != "" && !itemMatchesQuery(&item, query) {
+				continue
+			}
+		} else if query != "" && !strings.Contains(strings.ToLower(e.Name()), query) {
+			continue
+		}
+
+		items = append(items, item)
 	}
 
-	return &DirEntry{
+	return &ItemEntry{
 		Name:    stat.Name(),
 		Dir:     true,
 		Size:    stat.Size(),
@@ -667,8 +769,8 @@ func buildDirEntry(filesystem fs.FS, p string, stat fs.FileInfo) (*DirEntry, err
 }
 
 // serveDirList writes a JSON directory listing to the response.
-func serveDirList(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo) {
-	entry, err := buildDirEntry(filesystem, p, stat)
+func serveDirList(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo, depth int, query string) {
+	entry, err := buildItemTree(filesystem, p, stat, depth, query)
 	if err != nil {
 		x.WriteHeader(http.StatusInternalServerError)
 		return
@@ -677,8 +779,8 @@ func serveDirList(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo) {
 }
 
 // serveDirListHead sets headers for a directory listing without writing the body.
-func serveDirListHead(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo) {
-	entry, err := buildDirEntry(filesystem, p, stat)
+func serveDirListHead(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo, depth int, query string) {
+	entry, err := buildItemTree(filesystem, p, stat, depth, query)
 	if err != nil {
 		x.WriteHeader(http.StatusInternalServerError)
 		return
