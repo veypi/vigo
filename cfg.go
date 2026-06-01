@@ -53,7 +53,7 @@ func (c *Config) IsValid() error {
 	}
 	// 超时配置默认为 0（无限制），由使用者自行设置
 	if c.ShutdownTimeout <= 0 {
-		c.ShutdownTimeout = 3 * time.Second
+		c.ShutdownTimeout = time.Second
 	}
 	if c.MaxHeaderBytes <= 0 {
 		c.MaxHeaderBytes = 1 << 20

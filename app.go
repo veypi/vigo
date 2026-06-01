@@ -112,7 +112,7 @@ func (a *app[T]) Run() error {
 		return 4000
 	}(), "port (env: PORT)")
 	configFile := cmdMain.String("f", "./dev.yaml", "the config file")
-	loggerLevel := cmdMain.String("l", "debug", "logger_level")
+	loggerLevel := cmdMain.String("l", "info", "logger_level")
 	loggerPath := cmdMain.String("logger_path", "", "logger_path")
 	loggerMode := cmdMain.String("logger_mode", "console", "logger mode: console | nocolor | json")
 	cmdCfg := cmdMain.SubCommand("gen", "generate cfg file")
