@@ -13,10 +13,13 @@ import (
 	"net"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/alicebob/miniredis/v2"
 	"github.com/redis/go-redis/v9"
 )
+
+const defaultRedisTimeout = 10 * time.Second
 
 type prefixHook struct {
 	prefix string
@@ -136,6 +139,11 @@ type Redis struct {
 	DB       int    `json:"db"`
 	Prefix   string `json:"prefix"`
 
+	ReadTimeout  int `json:"read_timeout" desc:"redis read timeout in seconds, default 10"`
+	WriteTimeout int `json:"write_timeout" desc:"redis write timeout in seconds, default 10"`
+	PoolSize     int `json:"pool_size" desc:"redis connection pool size, default 0 (10*GOMAXPROCS)"`
+	MinIdleConns int `json:"min_idle_conns" desc:"redis min idle connections, default 0"`
+
 	once   sync.Once
 	client *redis.Client
 }
@@ -151,12 +159,29 @@ func (r *Redis) Client() *redis.Client {
 				Addr: mr.Addr(),
 			})
 		} else {
-			r.client = redis.NewClient(&redis.Options{
-				Addr:            r.Addr,
-				Password:        r.Password,
-				DB:              r.DB,
-				MaxRetries:      2,
-			})
+			opts := &redis.Options{
+				Addr:       r.Addr,
+				Password:   r.Password,
+				DB:         r.DB,
+				MaxRetries: 2,
+			}
+			if r.ReadTimeout > 0 {
+				opts.ReadTimeout = time.Duration(r.ReadTimeout) * time.Second
+			} else {
+				opts.ReadTimeout = defaultRedisTimeout
+			}
+			if r.WriteTimeout > 0 {
+				opts.WriteTimeout = time.Duration(r.WriteTimeout) * time.Second
+			} else {
+				opts.WriteTimeout = defaultRedisTimeout
+			}
+			if r.PoolSize > 0 {
+				opts.PoolSize = r.PoolSize
+			}
+			if r.MinIdleConns > 0 {
+				opts.MinIdleConns = r.MinIdleConns
+			}
+			r.client = redis.NewClient(opts)
 		}
 		if r.Prefix != "" {
 			r.client.AddHook(&prefixHook{prefix: r.Prefix})
