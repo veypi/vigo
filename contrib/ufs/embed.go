@@ -92,12 +92,8 @@ func (f *embedFS) Stat(name string) (fs.FileInfo, error) {
 	return file.Stat()
 }
 
-func (f *embedFS) Glob(path, pattern string, limit int) ([]GlobMatch, error) {
-	return SearchGlob(f, path, pattern, limit)
-}
-
-func (f *embedFS) Grep(path, glob, pattern string, limit int, ignoreCase bool) ([]GrepMatch, error) {
-	return SearchGrep(f, path, glob, pattern, limit, ignoreCase)
+func (f *embedFS) Search(path, glob, pattern string, limit int, ignoreCase bool) ([]SearchMatch, error) {
+	return Search(f, path, glob, pattern, limit, ignoreCase)
 }
 
 // generateETag generates an ETag based on file size and modTime.

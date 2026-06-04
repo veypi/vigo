@@ -53,60 +53,53 @@ type ItemEntry struct {
 	Items   []ItemEntry `json:"items,omitempty"`
 }
 
-// GlobMatch describes a file matching a glob pattern.
-type GlobMatch struct {
-	Path    string `json:"path"` // relative to search path
-	IsDir   bool   `json:"is_dir"`
-	Size    int64  `json:"size"`
-	ModTime int64  `json:"mod_time"` // unix timestamp
+// SearchMatch describes a file or content match from a search operation.
+// When pattern is empty (glob-only search), LineNum/Line/Column are zero values.
+// When pattern is set (grep search), IsDir is always false.
+type SearchMatch struct {
+	Path    string `json:"path"`               // relative to search path
+	IsDir   bool   `json:"is_dir"`             // always false for grep results
+	Size    int64  `json:"size"`               // file size (repeated per line in grep)
+	ModTime int64  `json:"mod_time"`           // unix timestamp
+	LineNum int    `json:"line_num,omitempty"` // 1-based line number (grep only)
+	Line    string `json:"line,omitempty"`     // matched line content (grep only)
+	Column  int    `json:"column,omitempty"`   // 1-based byte offset of match start (grep only)
 }
 
-// GrepMatch describes a content match.
-type GrepMatch struct {
-	Path    string `json:"path"`     // relative to search path
-	LineNum int    `json:"line_num"` // 1-based line number
-	Line    string `json:"line"`     // matched line content
-	Column  int    `json:"column"`   // 1-based byte offset of match start
-}
-
-// Searcher provides file search and content search capabilities.
+// Searcher provides file and content search capabilities.
+//
+// Pattern syntax for glob (matches against relative path, "/" as separator):
+//   - **        matches zero or more path segments (e.g., **/*.go, lib/**)
+//   - *         matches any sequence of non-separator characters within a single segment
+//   - ?         matches any single non-separator character
+//   - [abc]     matches any single character in the set
+//   - [a-z]     matches any single character in the range
+//   - exact     literal path component match (e.g., main.go matches only main.go)
+//
+// Examples:
+//
+//	**/*.go       recursively match all .go files
+//	*.go          match .go files only in the root (non-recursive)
+//	lib/**/*.go   match .go files anywhere under lib/
+//	**/test/*.go  match .go files in any directory named "test"
+//
+// Skipped content:
+//   - hidden entries (names starting with ".")
+//   - grep mode: directories in skipDirs list (node_modules, vendor, dist, build, etc.)
+//   - grep mode: binary files (detected by null byte in first 8KB)
+//
+// Results are sorted by modification time descending (grep: then line number ascending).
 type Searcher interface {
-	// Glob searches for files under path whose relative path matches pattern.
+	// Search searches under path. When pattern is empty, it performs a glob file-name
+	// search. When pattern is non-empty, it performs a grep content search — files are
+	// first filtered by glob, then each line is matched against the regex pattern.
 	//
-	// Pattern syntax (matches against relative path, "/" as separator):
-	//   - **        matches zero or more path segments (e.g., **/*.go, lib/**)
-	//   - *         matches any sequence of non-separator characters within a single segment
-	//   - ?         matches any single non-separator character
-	//   - [abc]     matches any single character in the set
-	//   - [a-z]     matches any single character in the range
-	//   - exact     literal path component match (e.g., main.go matches only main.go)
-	//
-	// Examples:
-	//   **/*.go       recursively match all .go files
-	//   *.go          match .go files only in the root (non-recursive)
-	//   lib/**/*.go   match .go files anywhere under lib/
-	//   **/test/*.go  match .go files in any directory named "test"
-	//
-	// Hidden entries (starting with ".") are skipped.
-	// Results are sorted by modification time descending.
-	Glob(path, pattern string, limit int) ([]GlobMatch, error)
-
-	// Grep searches file contents under path. Files are filtered by glob
-	// (same pattern syntax as Glob), then each line is matched against
-	// the regex pattern.
-	//
-	// glob   — file path filter, same syntax as Glob.pattern (supports **, *, ?, [a-z]).
-	//          Empty string matches all non-hidden files.
+	// glob    — file path filter (supports **, *, ?, [a-z]). Empty string matches all non-hidden files.
+	//           Case-sensitive only. ignoreCase does not affect glob matching.
 	// pattern — regexp (RE2) matched against each line of file content.
-	//          When ignoreCase is true, the regex is compiled with (?i) case-insensitive flag.
-	//
-	// Skipped content:
-	//   - hidden entries (names starting with ".")
-	//   - directories in skipDirs list (node_modules, vendor, dist, build, etc.)
-	//   - binary files (detected by null byte in first 8KB)
-	//
-	// Results are sorted by file modification time descending, then line number ascending.
-	Grep(path, glob, pattern string, limit int, ignoreCase bool) ([]GrepMatch, error)
+	//           When empty, Search returns file-level results (glob only). ignoreCase is ignored.
+	//           When non-empty and ignoreCase is true, the regex is compiled with (?i) flag.
+	Search(path, glob, pattern string, limit int, ignoreCase bool) ([]SearchMatch, error)
 }
 
 // ReadOnlyFS 只读文件系统接口

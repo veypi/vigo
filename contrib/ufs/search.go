@@ -65,13 +65,18 @@ var skipDirs = map[string]bool{
 	".output":           true,
 }
 
-// SearchGlob walks the filesystem from searchPath and returns files whose
-// path relative to searchPath matches the pattern. The pattern supports **
-// (zero or more path segments), * and ? (single segment, no path separator).
-// Hidden entries (starting with ".") are skipped. Results are sorted by
-// modification time descending, then truncated to limit.
-func SearchGlob(fsys fs.FS, searchPath, pattern string, limit int) ([]GlobMatch, error) {
-	searchPath, err := validatePath(searchPath, "glob")
+// Search walks the filesystem from searchPath and returns matching files or content.
+// When pattern is empty, it performs a glob file-name search (returns file-level results).
+// When pattern is non-empty, files are first filtered by glob, then each line is matched
+// against the regex pattern (returns line-level results, one per match).
+//
+// Hidden entries (starting with ".") are always skipped. In grep mode, known cache
+// directories and binary files are also skipped.
+//
+// Results are sorted by modification time descending. In grep mode, within the same file
+// results are sorted by line number ascending.
+func Search(fsys fs.FS, searchPath, glob, pattern string, limit int, ignoreCase bool) ([]SearchMatch, error) {
+	searchPath, err := validatePath(searchPath, "search")
 	if err != nil {
 		return nil, err
 	}
@@ -80,7 +85,27 @@ func SearchGlob(fsys fs.FS, searchPath, pattern string, limit int) ([]GlobMatch,
 		limit = 100
 	}
 
-	var results []GlobMatch
+	isGrep := pattern != ""
+
+	var re *regexp.Regexp
+	if isGrep {
+		if ignoreCase {
+			pattern = "(?i)" + pattern
+		}
+		re, err = regexp.Compile(pattern)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	// Phase 1: collect matching files with their metadata
+	type fileMatch struct {
+		path    string
+		size    int64
+		modTime int64
+	}
+	var files []fileMatch
+
 	err = fs.WalkDir(fsys, searchPath, func(p string, d fs.DirEntry, walkErr error) error {
 		if walkErr != nil {
 			return nil
@@ -92,97 +117,15 @@ func SearchGlob(fsys fs.FS, searchPath, pattern string, limit int) ([]GlobMatch,
 			}
 			return nil
 		}
-		// Only match files (not directories) against the pattern
 		if d.IsDir() {
+			if isGrep && skipDirs[d.Name()] {
+				return fs.SkipDir
+			}
 			return nil
 		}
 		rel := relPath(searchPath, p)
-		if !matchGlob(pattern, rel) {
+		if glob != "" && !matchGlob(glob, rel) {
 			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return nil
-		}
-		results = append(results, GlobMatch{
-			Path:    rel,
-			IsDir:   false,
-			Size:    info.Size(),
-			ModTime: info.ModTime().Unix(),
-		})
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-
-	sort.SliceStable(results, func(i, j int) bool {
-		return results[i].ModTime > results[j].ModTime
-	})
-	if len(results) > limit {
-		results = results[:limit]
-	}
-	return results, nil
-}
-
-// SearchGrep walks the filesystem from searchPath, filters files by glob (supporting **),
-// and searches their content for lines matching the regex pattern.
-// Hidden entries, known cache directories, and binary files are skipped.
-// When ignoreCase is true, the regex is compiled with case-insensitive flag.
-// Results are sorted by file modification time descending, then line number ascending.
-func SearchGrep(fsys fs.FS, searchPath, glob, pattern string, limit int, ignoreCase bool) ([]GrepMatch, error) {
-	searchPath, err := validatePath(searchPath, "grep")
-	if err != nil {
-		return nil, err
-	}
-
-	if limit <= 0 {
-		limit = 100
-	}
-
-	if ignoreCase {
-		// Prepend (?i) flag. If pattern already contains (?i), the duplicate
-		// is redundant but valid in RE2 — no need for extra detection logic.
-		pattern = "(?i)" + pattern
-	}
-	re, err := regexp.Compile(pattern)
-	if err != nil {
-		return nil, err
-	}
-
-	// Phase 1: collect matching files with their mod time
-	type fileMatch struct {
-		path    string
-		modTime int64
-	}
-	var files []fileMatch
-
-	err = fs.WalkDir(fsys, searchPath, func(p string, d fs.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return nil
-		}
-		if p == searchPath {
-			return nil
-		}
-		// Skip hidden entries
-		if len(d.Name()) > 0 && d.Name()[0] == '.' {
-			if d.IsDir() {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		if d.IsDir() {
-			if skipDirs[d.Name()] {
-				return fs.SkipDir
-			}
-			return nil
-		}
-		// Filter by glob against relative path
-		if glob != "" {
-			rel := relPath(searchPath, p)
-			if !matchGlob(glob, rel) {
-				return nil
-			}
 		}
 		info, err := d.Info()
 		if err != nil {
@@ -190,6 +133,7 @@ func SearchGrep(fsys fs.FS, searchPath, glob, pattern string, limit int, ignoreC
 		}
 		files = append(files, fileMatch{
 			path:    p,
+			size:    info.Size(),
 			modTime: info.ModTime().Unix(),
 		})
 		return nil
@@ -203,8 +147,25 @@ func SearchGrep(fsys fs.FS, searchPath, glob, pattern string, limit int, ignoreC
 		return files[i].modTime > files[j].modTime
 	})
 
-	// Phase 2: grep each file for content matches
-	var results []GrepMatch
+	// Phase 2: glob mode — return file-level results
+	if !isGrep {
+		results := make([]SearchMatch, 0, min(len(files), limit))
+		for _, fm := range files {
+			results = append(results, SearchMatch{
+				Path:    relPath(searchPath, fm.path),
+				IsDir:   false,
+				Size:    fm.size,
+				ModTime: fm.modTime,
+			})
+		}
+		if len(results) > limit {
+			results = results[:limit]
+		}
+		return results, nil
+	}
+
+	// Phase 2: grep mode — scan file contents line by line
+	var results []SearchMatch
 	for _, fm := range files {
 		fileResults, err := grepFile(fsys, fm.path, re)
 		if err != nil {
@@ -212,8 +173,11 @@ func SearchGrep(fsys fs.FS, searchPath, glob, pattern string, limit int, ignoreC
 		}
 		rel := relPath(searchPath, fm.path)
 		for _, r := range fileResults {
-			results = append(results, GrepMatch{
+			results = append(results, SearchMatch{
 				Path:    rel,
+				IsDir:   false,
+				Size:    fm.size,
+				ModTime: fm.modTime,
 				LineNum: r.LineNum,
 				Line:    r.Line,
 				Column:  r.Column,

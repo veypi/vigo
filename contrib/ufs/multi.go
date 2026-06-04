@@ -188,12 +188,8 @@ func (f *multiFS) Stat(name string) (fs.FileInfo, error) {
 	return nil, &fs.PathError{Op: "stat", Path: name, Err: fs.ErrNotExist}
 }
 
-func (f *multiFS) Glob(path, pattern string, limit int) ([]GlobMatch, error) {
-	return SearchGlob(f, path, pattern, limit)
-}
-
-func (f *multiFS) Grep(path, glob, pattern string, limit int, ignoreCase bool) ([]GrepMatch, error) {
-	return SearchGrep(f, path, glob, pattern, limit, ignoreCase)
+func (f *multiFS) Search(path, glob, pattern string, limit int, ignoreCase bool) ([]SearchMatch, error) {
+	return Search(f, path, glob, pattern, limit, ignoreCase)
 }
 
 // mergeDirEntries merges directory entries from multiple layers

@@ -38,13 +38,13 @@ func testFS(t testing.TB) fstest.MapFS {
 			Mode:    0o644,
 			ModTime: time.Unix(1500, 0),
 		},
-		// Hidden directory — skipped by both Glob and Grep
+		// Hidden directory — skipped by both glob and grep
 		".hidden/data.go": &fstest.MapFile{
 			Data:    []byte("package hidden\n\nfunc Secret() string { return \"shh\" }\n"),
 			Mode:    0o644,
 			ModTime: time.Unix(3000, 0),
 		},
-		// Cache directory — skipped by Grep
+		// Cache directory — skipped by grep
 		"node_modules/pkg/index.js": &fstest.MapFile{
 			Data:    []byte("module.exports = function hello() { console.log('hi'); }\n"),
 			Mode:    0o644,
@@ -71,14 +71,14 @@ func testFS(t testing.TB) fstest.MapFS {
 }
 
 // =============================================================================
-// SearchGlob tests
+// Search (glob mode) tests
 // =============================================================================
 
 func TestSearchGlob(t *testing.T) {
 	fsys := testFS(t)
 
 	t.Run("match go files with **", func(t *testing.T) {
-		results, err := SearchGlob(fsys, ".", "**/*.go", 0)
+		results, err := Search(fsys, ".", "**/*.go", "", 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -88,11 +88,10 @@ func TestSearchGlob(t *testing.T) {
 	})
 
 	t.Run("match go files non-recursive", func(t *testing.T) {
-		results, err := SearchGlob(fsys, ".", "*.go", 0)
+		results, err := Search(fsys, ".", "*.go", "", 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		// Only main.go is in root (not in lib/ or .hidden/)
 		if len(results) != 1 {
 			t.Fatalf("expected 1 go file in root, got %d: %v", len(results), results)
 		}
@@ -102,7 +101,7 @@ func TestSearchGlob(t *testing.T) {
 	})
 
 	t.Run("match markdown files", func(t *testing.T) {
-		results, err := SearchGlob(fsys, ".", "*.md", 0)
+		results, err := Search(fsys, ".", "*.md", "", 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -115,7 +114,7 @@ func TestSearchGlob(t *testing.T) {
 	})
 
 	t.Run("no matches", func(t *testing.T) {
-		results, err := SearchGlob(fsys, ".", "*.xyz", 0)
+		results, err := Search(fsys, ".", "*.xyz", "", 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -125,7 +124,7 @@ func TestSearchGlob(t *testing.T) {
 	})
 
 	t.Run("skip hidden dirs", func(t *testing.T) {
-		results, err := SearchGlob(fsys, ".", "**/*.go", 0)
+		results, err := Search(fsys, ".", "**/*.go", "", 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -137,7 +136,7 @@ func TestSearchGlob(t *testing.T) {
 	})
 
 	t.Run("results sorted by mod time desc", func(t *testing.T) {
-		results, err := SearchGlob(fsys, ".", "**/*.go", 0)
+		results, err := Search(fsys, ".", "**/*.go", "", 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -149,7 +148,7 @@ func TestSearchGlob(t *testing.T) {
 	})
 
 	t.Run("limit truncation", func(t *testing.T) {
-		results, err := SearchGlob(fsys, ".", "**/*.go", 2)
+		results, err := Search(fsys, ".", "**/*.go", "", 2, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -159,7 +158,7 @@ func TestSearchGlob(t *testing.T) {
 	})
 
 	t.Run("exact limit", func(t *testing.T) {
-		results, err := SearchGlob(fsys, ".", "**/*.go", 3)
+		results, err := Search(fsys, ".", "**/*.go", "", 3, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -169,14 +168,13 @@ func TestSearchGlob(t *testing.T) {
 	})
 
 	t.Run("subdirectory search", func(t *testing.T) {
-		results, err := SearchGlob(fsys, "lib", "*.go", 0)
+		results, err := Search(fsys, "lib", "*.go", "", 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
 		if len(results) != 2 {
 			t.Fatalf("expected 2 files in lib, got %d", len(results))
 		}
-		// Paths should be relative to lib
 		for _, r := range results {
 			if strings.Contains(r.Path, "lib/") {
 				t.Fatalf("path should be relative to search path: %s", r.Path)
@@ -185,7 +183,7 @@ func TestSearchGlob(t *testing.T) {
 	})
 
 	t.Run("double-star in subdirectory", func(t *testing.T) {
-		results, err := SearchGlob(fsys, ".", "lib/**/*.go", 0)
+		results, err := Search(fsys, ".", "lib/**/*.go", "", 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -200,7 +198,7 @@ func TestSearchGlob(t *testing.T) {
 	})
 
 	t.Run("double-star matches nested files", func(t *testing.T) {
-		results, err := SearchGlob(fsys, ".", "**/note.txt", 0)
+		results, err := Search(fsys, ".", "**/note.txt", "", 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -213,22 +211,20 @@ func TestSearchGlob(t *testing.T) {
 	})
 
 	t.Run("question mark pattern", func(t *testing.T) {
-		results, err := SearchGlob(fsys, ".", "?????.go", 0)
+		results, err := Search(fsys, ".", "?????.go", "", 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		// main.go has 4 chars before .go, but ? needs exactly 5 — should be 0
 		if len(results) != 0 {
 			t.Fatalf("expected 0 matches for ?????.go, got %d", len(results))
 		}
 	})
 
 	t.Run("question mark matches single char", func(t *testing.T) {
-		results, err := SearchGlob(fsys, ".", "????.??", 0)
+		results, err := Search(fsys, ".", "????.??", "", 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		// main.go = 4 chars + . + 2 chars → matches ????.??
 		found := false
 		for _, r := range results {
 			if r.Path == "main.go" {
@@ -248,7 +244,7 @@ func TestSearchGlob(t *testing.T) {
 			"z.txt": &fstest.MapFile{Data: []byte("z"), Mode: 0o644, ModTime: time.Unix(3, 0)},
 			"5.txt": &fstest.MapFile{Data: []byte("5"), Mode: 0o644, ModTime: time.Unix(4, 0)},
 		}
-		results, err := SearchGlob(fsys2, ".", "[a-c].txt", 0)
+		results, err := Search(fsys2, ".", "[a-c].txt", "", 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -334,28 +330,24 @@ func TestMatchGlob(t *testing.T) {
 }
 
 // =============================================================================
-// SearchGrep tests
+// Search (grep mode) tests
 // =============================================================================
 
 func TestSearchGrep(t *testing.T) {
 	fsys := testFS(t)
 
 	t.Run("basic regex match", func(t *testing.T) {
-		results, err := SearchGrep(fsys, ".", "**/*.go", `func\s+\w+`, 0, false)
+		results, err := Search(fsys, ".", "**/*.go", `func\s+\w+`, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(results) == 0 {
-			t.Fatal("expected at least one match")
-		}
-		// main.go: func main, lib/utils.go: func Add, lib/helper.go: func helper
 		if len(results) != 3 {
 			t.Fatalf("expected 3 matches, got %d: %v", len(results), results)
 		}
 	})
 
 	t.Run("no matches", func(t *testing.T) {
-		results, err := SearchGrep(fsys, ".", "", `xyzzy_nonexistent`, 0, false)
+		results, err := Search(fsys, ".", "", `xyzzy_nonexistent`, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -365,7 +357,7 @@ func TestSearchGrep(t *testing.T) {
 	})
 
 	t.Run("skip hidden dirs", func(t *testing.T) {
-		results, err := SearchGrep(fsys, ".", "", `Secret`, 0, false)
+		results, err := Search(fsys, ".", "", `Secret`, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -377,7 +369,7 @@ func TestSearchGrep(t *testing.T) {
 	})
 
 	t.Run("skip cache dirs", func(t *testing.T) {
-		results, err := SearchGrep(fsys, ".", "", `hello`, 0, false)
+		results, err := Search(fsys, ".", "", `hello`, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -389,7 +381,7 @@ func TestSearchGrep(t *testing.T) {
 	})
 
 	t.Run("skip binary files", func(t *testing.T) {
-		results, err := SearchGrep(fsys, ".", "", `func`, 0, false)
+		results, err := Search(fsys, ".", "", `func`, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -401,8 +393,7 @@ func TestSearchGrep(t *testing.T) {
 	})
 
 	t.Run("glob filter", func(t *testing.T) {
-		// Only search .go files: should not match func in README or binary
-		results, err := SearchGrep(fsys, ".", "*.go", `func`, 0, false)
+		results, err := Search(fsys, ".", "*.go", `func`, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -414,7 +405,7 @@ func TestSearchGrep(t *testing.T) {
 	})
 
 	t.Run("sort by mod time desc then line num asc", func(t *testing.T) {
-		results, err := SearchGrep(fsys, ".", "*.go", `func`, 0, false)
+		results, err := Search(fsys, ".", "*.go", `func`, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -425,7 +416,6 @@ func TestSearchGrep(t *testing.T) {
 				prevPath = r.Path
 				prevLine = 0
 			}
-			// Same file: line numbers ascending
 			if r.LineNum <= prevLine && prevLine != 0 {
 				t.Fatalf("line numbers should be ascending within same file: %v", results)
 			}
@@ -434,7 +424,7 @@ func TestSearchGrep(t *testing.T) {
 	})
 
 	t.Run("limit truncation", func(t *testing.T) {
-		results, err := SearchGrep(fsys, ".", "*.go", `func`, 1, false)
+		results, err := Search(fsys, ".", "*.go", `func`, 1, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -444,7 +434,7 @@ func TestSearchGrep(t *testing.T) {
 	})
 
 	t.Run("results relative to search path", func(t *testing.T) {
-		results, err := SearchGrep(fsys, "lib", "*.go", `func`, 0, false)
+		results, err := Search(fsys, "lib", "*.go", `func`, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -456,7 +446,7 @@ func TestSearchGrep(t *testing.T) {
 	})
 
 	t.Run("column is 1-based byte offset", func(t *testing.T) {
-		results, err := SearchGrep(fsys, ".", "*.go", `func main`, 0, false)
+		results, err := Search(fsys, ".", "*.go", `func main`, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -469,7 +459,7 @@ func TestSearchGrep(t *testing.T) {
 	})
 
 	t.Run("empty glob matches all files", func(t *testing.T) {
-		results, err := SearchGrep(fsys, ".", "", `hello`, 0, false)
+		results, err := Search(fsys, ".", "", `hello`, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -481,18 +471,17 @@ func TestSearchGrep(t *testing.T) {
 	})
 
 	t.Run("ignoreCase matches uppercase", func(t *testing.T) {
-		results, err := SearchGrep(fsys, ".", "*.go", `HELLO`, 0, true)
+		results, err := Search(fsys, ".", "*.go", `HELLO`, 0, true)
 		if err != nil {
 			t.Fatal(err)
 		}
-		// main.go has println("hello") — matches with ignoreCase
 		if len(results) != 1 {
 			t.Fatalf("expected 1 match for 'HELLO' with ignoreCase, got %d: %v", len(results), results)
 		}
 	})
 
 	t.Run("case sensitive no match", func(t *testing.T) {
-		results, err := SearchGrep(fsys, ".", "*.go", `HELLO`, 0, false)
+		results, err := Search(fsys, ".", "*.go", `HELLO`, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -502,7 +491,7 @@ func TestSearchGrep(t *testing.T) {
 	})
 
 	t.Run("glob with ** in grep", func(t *testing.T) {
-		results, err := SearchGrep(fsys, ".", "lib/**", `func`, 0, false)
+		results, err := Search(fsys, ".", "lib/**", `func`, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -517,7 +506,7 @@ func TestSearchGrep(t *testing.T) {
 	})
 
 	t.Run("glob exact file matches only that file", func(t *testing.T) {
-		results, err := SearchGrep(fsys, ".", "main.go", `func`, 0, false)
+		results, err := Search(fsys, ".", "main.go", `func`, 0, false)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -530,17 +519,17 @@ func TestSearchGrep(t *testing.T) {
 	})
 }
 
-func TestSearchGrepInvalidRegex(t *testing.T) {
+func TestSearchInvalidRegex(t *testing.T) {
 	fsys := testFS(t)
-	_, err := SearchGrep(fsys, ".", "", `[unclosed`, 0, false)
+	_, err := Search(fsys, ".", "", `[unclosed`, 0, false)
 	if err == nil {
 		t.Fatal("expected error for invalid regex")
 	}
 }
 
-func TestSearchGrepInvalidPath(t *testing.T) {
+func TestSearchInvalidPath(t *testing.T) {
 	fsys := testFS(t)
-	_, err := SearchGrep(fsys, "../escape", "", `x`, 0, false)
+	_, err := Search(fsys, "../escape", "", `x`, 0, false)
 	if err == nil {
 		t.Fatal("expected error for invalid path")
 	}
@@ -573,11 +562,12 @@ func TestRelPath(t *testing.T) {
 }
 
 // =============================================================================
-// GlobMatch type tests
+// SearchMatch type tests
 // =============================================================================
 
-func TestGlobMatchFields(t *testing.T) {
-	m := GlobMatch{
+func TestSearchMatchFields(t *testing.T) {
+	// Glob mode result
+	m := SearchMatch{
 		Path:    "sub/note.txt",
 		IsDir:   false,
 		Size:    42,
@@ -595,30 +585,30 @@ func TestGlobMatchFields(t *testing.T) {
 	if m.ModTime != 1700000000 {
 		t.Errorf("ModTime = %d", m.ModTime)
 	}
-}
+	if m.LineNum != 0 {
+		t.Error("LineNum should be 0 for glob result")
+	}
 
-// =============================================================================
-// GrepMatch type tests
-// =============================================================================
-
-func TestGrepMatchFields(t *testing.T) {
-	m := GrepMatch{
+	// Grep mode result
+	m2 := SearchMatch{
 		Path:    "main.go",
+		Size:    1024,
+		ModTime: 1500000000,
 		LineNum: 3,
 		Line:    "func main() {",
 		Column:  6,
 	}
-	if m.Path != "main.go" {
-		t.Errorf("Path = %q", m.Path)
+	if m2.Path != "main.go" {
+		t.Errorf("Path = %q", m2.Path)
 	}
-	if m.LineNum != 3 {
-		t.Errorf("LineNum = %d", m.LineNum)
+	if m2.LineNum != 3 {
+		t.Errorf("LineNum = %d", m2.LineNum)
 	}
-	if m.Line != "func main() {" {
-		t.Errorf("Line = %q", m.Line)
+	if m2.Line != "func main() {" {
+		t.Errorf("Line = %q", m2.Line)
 	}
-	if m.Column != 6 {
-		t.Errorf("Column = %d", m.Column)
+	if m2.Column != 6 {
+		t.Errorf("Column = %d", m2.Column)
 	}
 }
 
@@ -627,7 +617,6 @@ func TestGrepMatchFields(t *testing.T) {
 // =============================================================================
 
 func TestLocalFSSatisfiesSearcher(t *testing.T) {
-	// Compile-time check: *localFS implements FS (which embeds Searcher)
 	var _ FS = (*localFS)(nil)
 }
 
@@ -647,7 +636,7 @@ func TestSearchGlobEmptyDir(t *testing.T) {
 	fsys := fstest.MapFS{
 		"empty": &fstest.MapFile{Mode: fs.ModeDir, ModTime: time.Unix(1, 0)},
 	}
-	results, err := SearchGlob(fsys, ".", "*", 0)
+	results, err := Search(fsys, ".", "*", "", 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -658,7 +647,7 @@ func TestSearchGlobEmptyDir(t *testing.T) {
 
 func TestSearchGlobLimitZero(t *testing.T) {
 	fsys := testFS(t)
-	results, err := SearchGlob(fsys, ".", "**/*.go", 0)
+	results, err := Search(fsys, ".", "**/*.go", "", 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -670,8 +659,7 @@ func TestSearchGlobLimitZero(t *testing.T) {
 
 func TestSearchGrepRegexAnchored(t *testing.T) {
 	fsys := testFS(t)
-	// "^func" should only match lines starting with func
-	results, err := SearchGrep(fsys, ".", "*.go", `^func`, 0, false)
+	results, err := Search(fsys, ".", "*.go", `^func`, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -684,7 +672,7 @@ func TestSearchGrepRegexAnchored(t *testing.T) {
 
 func TestSearchGrepSubdirectory(t *testing.T) {
 	fsys := testFS(t)
-	results, err := SearchGrep(fsys, "sub", "", `hello`, 0, false)
+	results, err := Search(fsys, "sub", "", `hello`, 0, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -750,16 +738,15 @@ func TestSkipDirsContainsExpected(t *testing.T) {
 // ensure sorts are stable
 // =============================================================================
 
-func TestSearchGlobSortStability(t *testing.T) {
-	// Files with same mod time should have deterministic ordering
+func TestSearchSortStability(t *testing.T) {
 	now := time.Unix(1000, 0)
 	fsys := fstest.MapFS{
 		"a.go": &fstest.MapFile{Data: []byte("a"), Mode: 0o644, ModTime: now},
 		"c.go": &fstest.MapFile{Data: []byte("c"), Mode: 0o644, ModTime: now},
 		"b.go": &fstest.MapFile{Data: []byte("b"), Mode: 0o644, ModTime: now},
 	}
-	results1, _ := SearchGlob(fsys, ".", "*.go", 0)
-	results2, _ := SearchGlob(fsys, ".", "*.go", 0)
+	results1, _ := Search(fsys, ".", "*.go", "", 0, false)
+	results2, _ := Search(fsys, ".", "*.go", "", 0, false)
 	if len(results1) != 3 || len(results2) != 3 {
 		t.Fatal("expected 3 results")
 	}
@@ -778,7 +765,7 @@ func BenchmarkSearchGlob(b *testing.B) {
 	fsys := testFS(b)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		SearchGlob(fsys, ".", "**/*.go", 100)
+		Search(fsys, ".", "**/*.go", "", 100, false)
 	}
 }
 
@@ -786,6 +773,6 @@ func BenchmarkSearchGrep(b *testing.B) {
 	fsys := testFS(b)
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		SearchGrep(fsys, ".", "*.go", `func`, 100, false)
+		Search(fsys, ".", "*.go", `func`, 100, false)
 	}
 }

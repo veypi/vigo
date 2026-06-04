@@ -142,12 +142,8 @@ func (f *localFS) Rename(oldname, newname string) error {
 	return fsErr(os.Rename(oldPath, newPath), "rename", oldname)
 }
 
-func (f *localFS) Glob(path, pattern string, limit int) ([]GlobMatch, error) {
-	return SearchGlob(f, path, pattern, limit)
-}
-
-func (f *localFS) Grep(path, glob, pattern string, limit int, ignoreCase bool) ([]GrepMatch, error) {
-	return SearchGrep(f, path, glob, pattern, limit, ignoreCase)
+func (f *localFS) Search(path, glob, pattern string, limit int, ignoreCase bool) ([]SearchMatch, error) {
+	return Search(f, path, glob, pattern, limit, ignoreCase)
 }
 
 func (f *localFS) WriteFile(name string, data []byte, perm fs.FileMode) error {

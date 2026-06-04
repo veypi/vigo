@@ -75,8 +75,8 @@ type HandlerOptions struct {
 	// Default: 0
 	MaxDepth int
 
-	// AllowSearch enables the ?query= parameter for keyword-based file name search.
-	// Default: false
+	// AllowSearch enables the ?glob= query parameter for file/content search via Searcher.
+	// When false (default), ?glob= requests return 403 Forbidden.
 	AllowSearch bool
 }
 
@@ -216,9 +216,67 @@ func setCacheHeaders(w http.ResponseWriter, etag string, modTime time.Time, cach
 	w.Header().Set("Cache-Control", cacheControl)
 }
 
-// skipFallback returns true when the request carries the X-No-Fallback header.
-func skipFallback(x *vigo.X) bool {
-	return x.Request.Header.Get("X-No-Fallback") != ""
+// skipFallback returns true when the default file fallback should be skipped.
+// Always true when df is nil (no fallback configured).
+// When df is set, fallback is skipped for:
+//   - X-No-Fallback header or ?x-no-fallback query param
+//   - Accept header does not contain text/html (non-browser client like curl)
+func skipFallback(x *vigo.X, df *defaultFileInfo) bool {
+	if df == nil {
+		return true
+	}
+	if x.Request.Header.Get("X-No-Fallback") != "" {
+		return true
+	}
+	if x.Request.URL.Query().Has("x-no-fallback") {
+		return true
+	}
+	accept := x.Request.Header.Get("Accept")
+	if accept == "" {
+		return true
+	}
+	return !strings.Contains(accept, "text/html")
+}
+
+// parseSearchParams extracts search parameters from the query string.
+// Returns glob, pattern, limit, ignoreCase, and whether a search was requested (glob != "").
+func parseSearchParams(r *http.Request) (glob, pattern string, limit int, ignoreCase, ok bool) {
+	q := r.URL.Query()
+	glob = q.Get("glob")
+	if glob == "" {
+		return "", "", 0, false, false
+	}
+	pattern = q.Get("pattern")
+	if l, err := strconv.Atoi(q.Get("limit")); err == nil && l > 0 {
+		limit = l
+	}
+	ignoreCase = q.Get("ignore_case") == "true"
+	return glob, pattern, limit, ignoreCase, true
+}
+
+// trySearch checks for a ?glob= search request and handles it via Searcher.
+// Returns true if the request was handled (search was requested).
+func trySearch(x *vigo.X, filesystem fs.FS, searchPath string, options *HandlerOptions) bool {
+	glob, pattern, limit, ignoreCase, ok := parseSearchParams(x.Request)
+	if !ok {
+		return false
+	}
+	if !options.AllowSearch {
+		x.WriteHeader(http.StatusForbidden)
+		return true
+	}
+	searcher, ok := filesystem.(Searcher)
+	if !ok {
+		x.WriteHeader(http.StatusNotImplemented)
+		return true
+	}
+	results, err := searcher.Search(searchPath, glob, pattern, limit, ignoreCase)
+	if err != nil {
+		x.WriteHeader(http.StatusBadRequest)
+		return true
+	}
+	x.JSON(results)
+	return true
 }
 
 // =============================================================================
@@ -230,6 +288,10 @@ func handleGet(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 	p, err := resolvePath(x, "open", options.PathFunc)
 	if err != nil {
 		x.WriteHeader(http.StatusBadRequest)
+		return
+	}
+
+	if trySearch(x, filesystem, p, options) {
 		return
 	}
 
@@ -259,8 +321,8 @@ func handleGet(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 			x.WriteHeader(http.StatusForbidden)
 			return
 		}
-		depth, query := parseListParams(x.Request, options)
-		serveDirList(x, filesystem, p, stat, depth, query)
+		depth := parseDepth(x.Request, options)
+		serveDirList(x, filesystem, p, stat, depth)
 		return
 	}
 
@@ -287,9 +349,13 @@ func handleGetWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions, 
 		return
 	}
 
+	if trySearch(x, filesystem, p, options) {
+		return
+	}
+
 	file, err := filesystem.Open(p)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) && df != nil && !skipFallback(x) {
+		if errors.Is(err, fs.ErrNotExist) && !skipFallback(x, df) {
 			serveDefaultFile(x, filesystem, df, options)
 			return
 		}
@@ -313,7 +379,7 @@ func handleGetWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions, 
 	}
 
 	if stat.IsDir() {
-		if df != nil && !skipFallback(x) {
+		if !skipFallback(x, df) {
 			serveDefaultFile(x, filesystem, df, options)
 			return
 		}
@@ -321,8 +387,14 @@ func handleGetWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions, 
 			x.WriteHeader(http.StatusForbidden)
 			return
 		}
-		depth, query := parseListParams(x.Request, options)
-		serveDirList(x, filesystem, p, stat, depth, query)
+		depth := parseDepth(x.Request, options)
+		serveDirList(x, filesystem, p, stat, depth)
+		return
+	}
+
+	// Browser (no X-No-Fallback, Accept: text/html) → serve SPA
+	if !skipFallback(x, df) {
+		serveDefaultFile(x, filesystem, df, options)
 		return
 	}
 
@@ -349,6 +421,17 @@ func handleHead(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 		return
 	}
 
+	// HEAD with search params: just return 200 with JSON content type
+	if _, _, _, _, ok := parseSearchParams(x.Request); ok {
+		if _, isSearcher := filesystem.(Searcher); isSearcher {
+			x.Header().Set("Content-Type", "application/json")
+			x.WriteHeader(http.StatusOK)
+			return
+		}
+		x.WriteHeader(http.StatusNotImplemented)
+		return
+	}
+
 	file, err := filesystem.Open(p)
 	if err != nil {
 		if errors.Is(err, fs.ErrNotExist) {
@@ -375,8 +458,8 @@ func handleHead(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 			x.WriteHeader(http.StatusForbidden)
 			return
 		}
-		depth, query := parseListParams(x.Request, options)
-		serveDirListHead(x, filesystem, p, stat, depth, query)
+		depth := parseDepth(x.Request, options)
+		serveDirListHead(x, filesystem, p, stat, depth)
 		return
 	}
 
@@ -403,9 +486,19 @@ func handleHeadWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions,
 		return
 	}
 
+	if _, _, _, _, ok := parseSearchParams(x.Request); ok {
+		if _, isSearcher := filesystem.(Searcher); isSearcher {
+			x.Header().Set("Content-Type", "application/json")
+			x.WriteHeader(http.StatusOK)
+			return
+		}
+		x.WriteHeader(http.StatusNotImplemented)
+		return
+	}
+
 	file, err := filesystem.Open(p)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) && df != nil && !skipFallback(x) {
+		if errors.Is(err, fs.ErrNotExist) && !skipFallback(x, df) {
 			serveDefaultFileHead(x, filesystem, df, options)
 			return
 		}
@@ -429,7 +522,7 @@ func handleHeadWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions,
 	}
 
 	if stat.IsDir() {
-		if df != nil && !skipFallback(x) {
+		if !skipFallback(x, df) {
 			serveDefaultFileHead(x, filesystem, df, options)
 			return
 		}
@@ -437,8 +530,14 @@ func handleHeadWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions,
 			x.WriteHeader(http.StatusForbidden)
 			return
 		}
-		depth, query := parseListParams(x.Request, options)
-		serveDirListHead(x, filesystem, p, stat, depth, query)
+		depth := parseDepth(x.Request, options)
+		serveDirListHead(x, filesystem, p, stat, depth)
+		return
+	}
+
+	// Browser (no X-No-Fallback, Accept: text/html) → serve SPA
+	if !skipFallback(x, df) {
+		serveDefaultFileHead(x, filesystem, df, options)
 		return
 	}
 
@@ -662,14 +761,13 @@ func isGitRepo(filesystem fs.FS, p string) bool {
 	return err == nil && info.IsDir()
 }
 
-// parseListParams extracts depth and query from the request query string.
-func parseListParams(r *http.Request, options *HandlerOptions) (depth int, query string) {
+// parseDepth extracts depth from the request query string.
+func parseDepth(r *http.Request, options *HandlerOptions) int {
 	if options.MaxDepth <= 0 {
-		return 0, ""
+		return 0
 	}
-	q := r.URL.Query()
-	depth = 1
-	if d, err := strconv.Atoi(q.Get("depth")); err == nil {
+	depth := 1
+	if d, err := strconv.Atoi(r.URL.Query().Get("depth")); err == nil {
 		depth = d
 	}
 	if depth < 1 {
@@ -678,30 +776,11 @@ func parseListParams(r *http.Request, options *HandlerOptions) (depth int, query
 	if depth > options.MaxDepth {
 		depth = options.MaxDepth
 	}
-	if options.AllowSearch {
-		query = strings.ToLower(q.Get("query"))
-	}
-	return
-}
-
-// itemMatchesQuery checks if an ItemEntry or any of its descendants match the query.
-func itemMatchesQuery(item *ItemEntry, query string) bool {
-	if query == "" {
-		return true
-	}
-	if strings.Contains(strings.ToLower(item.Name), query) {
-		return true
-	}
-	for i := range item.Items {
-		if itemMatchesQuery(&item.Items[i], query) {
-			return true
-		}
-	}
-	return false
+	return depth
 }
 
 // buildItemTree builds an ItemEntry tree for the directory at p, recursing up to depth levels.
-func buildItemTree(filesystem fs.FS, p string, stat fs.FileInfo, depth int, query string) (*ItemEntry, error) {
+func buildItemTree(filesystem fs.FS, p string, stat fs.FileInfo, depth int) (*ItemEntry, error) {
 	entries, err := readDir(filesystem, p)
 	if err != nil {
 		return nil, err
@@ -743,16 +822,11 @@ func buildItemTree(filesystem fs.FS, p string, stat fs.FileInfo, depth int, quer
 				subStat, sErr := subFile.Stat()
 				subFile.Close()
 				if sErr == nil {
-					if subEntry, sErr := buildItemTree(filesystem, subPath, subStat, depth-1, query); sErr == nil {
+					if subEntry, sErr := buildItemTree(filesystem, subPath, subStat, depth-1); sErr == nil {
 						item.Items = subEntry.Items
 					}
 				}
 			}
-			if query != "" && !itemMatchesQuery(&item, query) {
-				continue
-			}
-		} else if query != "" && !strings.Contains(strings.ToLower(e.Name()), query) {
-			continue
 		}
 
 		items = append(items, item)
@@ -769,8 +843,8 @@ func buildItemTree(filesystem fs.FS, p string, stat fs.FileInfo, depth int, quer
 }
 
 // serveDirList writes a JSON directory listing to the response.
-func serveDirList(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo, depth int, query string) {
-	entry, err := buildItemTree(filesystem, p, stat, depth, query)
+func serveDirList(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo, depth int) {
+	entry, err := buildItemTree(filesystem, p, stat, depth)
 	if err != nil {
 		x.WriteHeader(http.StatusInternalServerError)
 		return
@@ -779,8 +853,8 @@ func serveDirList(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo, depth
 }
 
 // serveDirListHead sets headers for a directory listing without writing the body.
-func serveDirListHead(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo, depth int, query string) {
-	entry, err := buildItemTree(filesystem, p, stat, depth, query)
+func serveDirListHead(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo, depth int) {
+	entry, err := buildItemTree(filesystem, p, stat, depth)
 	if err != nil {
 		x.WriteHeader(http.StatusInternalServerError)
 		return
@@ -870,6 +944,15 @@ func serveDefaultFileHead(x *vigo.X, filesystem fs.FS, df *defaultFileInfo, opti
 // It expects a path parameter named "path" in the route (e.g., "/static/{path:*}").
 // If the path resolves to a directory, it returns a JSON list of the directory contents.
 //
+// Search: when the ?glob= query parameter is present, the handler attempts a search
+// via the Searcher interface instead of serving a file. If the underlying FS does not
+// implement Searcher, 501 Not Implemented is returned.
+//
+//	?glob=**/*.go                    — file-name glob search
+//	?glob=**/*.go&pattern=func       — content grep search
+//	?glob=**/*.go&limit=20           — limit results (default 100)
+//	?glob=&pattern=hello&ignore_case=true — case-insensitive grep
+//
 // HTTP Cache Support:
 //   - ETag: Generated from file size and modification time (or from ETagCache if provided)
 //   - Last-Modified: File modification time
@@ -886,11 +969,7 @@ func NewHandler(fsLoader *fs.FS, opts ...*HandlerOptions) func(*vigo.X) {
 // If the requested path is not found or is a directory, the default file is served.
 // The default file is resolved lazily on the first request.
 //
-// HTTP Cache Support:
-//   - ETag: Generated from file size and modification time (or from ETagCache if provided)
-//   - Last-Modified: File modification time
-//   - 304 Not Modified: Returned when If-None-Match or If-Modified-Since match
-//   - Cache-Control: Configurable via HandlerOptions
+// See NewHandler for search and cache behavior.
 func NewHandlerWithDefault(filesystem *fs.FS, defaultPath string, opts ...*HandlerOptions) func(*vigo.X) {
 	options := mergeOptions(opts)
 	var df *defaultFileInfo
@@ -909,7 +988,7 @@ func NewHandlerWithDefault(filesystem *fs.FS, defaultPath string, opts ...*Handl
 // Mount with router.Any() to capture all HTTP methods.
 //
 // Supported methods:
-//   - GET: Read file or list directory
+//   - GET: Read file, list directory, or search (when ?glob= is present)
 //   - HEAD: Same as GET but returns headers only
 //   - PUT: Create/overwrite file (request body = file content)
 //   - DELETE: Remove file or directory
