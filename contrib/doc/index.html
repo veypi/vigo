@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Documentation</title>
+  <style>
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      color: #1a1a1a;
+      background: #fff
+    }
+
+    #app {
+      max-width: 860px;
+      margin: 0 auto;
+      padding: 40px 48px
+    }
+
+    #search-wrap {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 24px
+    }
+
+    #search {
+      flex: 1;
+      padding: 10px 16px;
+      border: 1px solid #ddd;
+      border-radius: 8px;
+      font-size: 14px;
+      outline: none;
+      transition: border-color .2s;
+      background: #fafafa
+    }
+
+    #search:focus {
+      border-color: #6b7dff;
+      background: #fff
+    }
+
+    .search-toggle {
+      flex-shrink: 0;
+      padding: 6px 16px;
+      font-size: 13px;
+      color: #666;
+      background: none;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      cursor: pointer;
+      transition: all .15s;
+      white-space: nowrap
+    }
+
+    .search-toggle:hover {
+      border-color: #6b7dff;
+      color: #6b7dff
+    }
+
+    .search-toggle.on {
+      background: #6b7dff;
+      border-color: #6b7dff;
+      color: #fff
+    }
+
+    .toolbar {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #eee
+    }
+
+    .toolbar .fname {
+      font-size: 16px;
+      font-weight: 500;
+      flex: 1
+    }
+
+    .toolbar .btn-download {
+      flex-shrink: 0;
+      padding: 6px 18px;
+      cursor: pointer;
+      font-size: 13px;
+      color: #333;
+      background: none;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      text-decoration: none;
+      transition: all .15s
+    }
+
+    .toolbar .btn-download:hover {
+      background: #f0f0f0;
+      border-color: #aaa
+    }
+
+    #file-list {
+      margin-top: 8px
+    }
+
+    #file-list .item {
+      display: block;
+      width: 100%;
+      padding: 8px 16px;
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1.5;
+      color: #444;
+      border: none;
+      background: none;
+      text-align: left;
+      border-radius: 6px;
+      transition: background .1s;
+      margin-bottom: 1px
+    }
+
+    #file-list .item:hover {
+      background: #f0f0f5
+    }
+
+    #file-list .item.active {
+      background: #e0e4ff;
+      color: #1a1a1a;
+      font-weight: 500
+    }
+
+    #file-list .search-line {
+      display: block;
+      width: 100%;
+      padding: 4px 16px 4px 36px;
+      cursor: pointer;
+      font-size: 13px;
+      line-height: 1.7;
+      color: #666;
+      border: none;
+      background: none;
+      text-align: left;
+      border-radius: 4px;
+      transition: background .1s;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap
+    }
+
+    #file-list .search-line:hover {
+      background: #f0f0f5
+    }
+
+    #file-list .search-line .ln {
+      color: #999;
+      margin-right: 8px;
+      font-size: 11px;
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', Consolas, monospace
+    }
+
+    #file-list .empty {
+      padding: 32px 16px;
+      color: #999;
+      font-size: 14px;
+      text-align: center
+    }
+
+    #content {
+      margin-top: 16px
+    }
+
+    #content pre {
+      font-family: 'SF Mono', Monaco, 'Cascadia Code', 'Consolas', monospace;
+      font-size: 14px;
+      line-height: 1.75;
+      white-space: pre-wrap;
+      word-break: break-word;
+      tab-size: 4
+    }
+
+    #content pre.line-numbers {
+      counter-reset: ln
+    }
+
+    #content pre.line-numbers span.line {
+      display: block;
+      padding-left: 52px;
+      position: relative;
+      min-height: 1.75em
+    }
+
+    #content pre.line-numbers span.line::before {
+      counter-increment: ln;
+      content: counter(ln);
+      position: absolute;
+      left: 0;
+      width: 40px;
+      text-align: right;
+      color: #bbb;
+      font-size: 12px;
+      padding-right: 12px;
+      user-select: none
+    }
+
+    #content pre.line-numbers span.line.hl {
+      background: #fff3cd;
+      border-radius: 2px
+    }
+
+    #content pre.line-numbers span.line.hl::before {
+      color: #997404
+    }
+
+    #content img {
+      max-width: 100%;
+      height: auto;
+      border-radius: 4px
+    }
+
+    #content .binary-msg {
+      text-align: center;
+      margin-top: 60px;
+      padding: 40px;
+      color: #888
+    }
+
+    #content .binary-msg .icon {
+      font-size: 48px;
+      margin-bottom: 16px
+    }
+
+    #content .binary-msg .name {
+      font-size: 15px;
+      color: #555;
+      margin-bottom: 12px
+    }
+
+    #content .binary-msg .size {
+      font-size: 13px;
+      color: #999
+    }
+
+    .error-page {
+      text-align: center;
+      padding: 100px 40px
+    }
+
+    .error-page .code {
+      font-size: 72px;
+      font-weight: 700;
+      color: #ddd;
+      line-height: 1
+    }
+
+    .error-page .label {
+      font-size: 18px;
+      color: #555;
+      margin-top: 12px
+    }
+
+    .error-page .detail {
+      font-size: 13px;
+      color: #999;
+      margin-top: 6px
+    }
+
+    @media(max-width:700px) {
+      #app {
+        padding: 20px 16px
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <div id="app">
+    <div id="search-wrap"><input type="search" id="search" placeholder="搜索文件名..." autocomplete="off"><button id="search-toggle" class="search-toggle" title="切换到内容搜索">Aa</button></div>
+    <div id="file-list"></div>
+    <div id="content"></div>
+  </div>
+  <script>
+    (function () {
+      var PREFIX = "{{PREFIX}}";
+      var DEPTH = "{{DEPTH}}";
+
+      var fileList = document.getElementById('file-list');
+      var content = document.getElementById('content');
+      var search = document.getElementById('search');
+      var app = document.getElementById('app');
+      var searchWrap = document.getElementById('search-wrap');
+      var activeEl = null;
+      var searchTimer = null;
+      var searchMode = 'path';
+      var currentPath = '';
+      var currentLineRange = null;
+
+      function api(path) {
+        return path ? PREFIX + '/' + path : PREFIX;
+      }
+
+      async function fetchJSON(url) {
+        var res = await fetch(url, {headers: {'X-No-Fallback': 'true'}});
+        if (!res.ok) throw new Error(res.status);
+        return res.json();
+      }
+
+      function getURLState() {
+        var p = window.location.pathname;
+        if (PREFIX && p.indexOf(PREFIX) === 0) {
+          p = p.substring(PREFIX.length);
+        }
+        while (p[0] === '/') p = p.substring(1);
+        while (p.length > 0 && p[p.length - 1] === '/') p = p.substring(0, p.length - 1);
+
+        var lr = null;
+        var m = p.match(/@L=(\d+)(?:-(\d+))?$/);
+        if (m) {
+          p = p.substring(0, m.index);
+          lr = {start: parseInt(m[1], 10)};
+          if (m[2] !== undefined) lr.end = parseInt(m[2], 10);
+          else lr.end = lr.start;
+        }
+        return {path: p, lineRange: lr};
+      }
+
+      async function isFile(p) {
+        if (!p) return false;
+        try {
+          var res = await fetch(api(p) + '?x-no-fallback', {method: 'HEAD'});
+          if (!res.ok) return false;
+          var ct = res.headers.get('Content-Type') || '';
+          return ct.indexOf('application/json') === -1;
+        } catch (e) {return false;}
+      }
+
+      function pushURL(p, lineRange) {
+        var url = api(p);
+        if (lineRange) {
+          if (lineRange.start === lineRange.end) url += '@L=' + lineRange.start;
+          else url += '@L=' + lineRange.start + '-' + lineRange.end;
+        }
+        if (url !== window.location.pathname) {
+          history.pushState({path: p, lineRange: lineRange}, '', url);
+        }
+      }
+
+      function classifyFile(ct) {
+        if (!ct) return 'binary';
+        if (ct.indexOf('text/') === 0 || ct.indexOf('application/json') === 0 ||
+          ct.indexOf('application/xml') === 0 || ct.indexOf('application/javascript') === 0 ||
+          ct.indexOf('application/typescript') === 0 || ct.indexOf('message/') === 0 ||
+          ct.indexOf('application/x-sh') === 0 || ct.indexOf('application/x-yaml') === 0 ||
+          ct.indexOf('application/x-httpd-php') === 0 || ct === 'application/ld+json') {
+          return 'text';
+        }
+        if (ct.indexOf('image/') === 0) return 'image';
+        return 'binary';
+      }
+
+      function formatSize(bytes) {
+        if (bytes < 1024) return bytes + ' B';
+        if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+        return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+      }
+
+      function renderTextContent(text, lineRange) {
+        var lines = text.split('\n');
+        var html = '<pre class="line-numbers">';
+        for (var i = 0; i < lines.length; i++) {
+          var ln = i + 1;
+          var cls = 'line';
+          if (lineRange && ln >= lineRange.start && ln <= lineRange.end) cls += ' hl';
+          html += '<span class="' + cls + '" id="L' + ln + '">' + escapeHtml(lines[i]) + '</span>\n';
+        }
+        html += '</pre>';
+        return html;
+      }
+
+      function scrollToLine() {
+        var hl = document.querySelector('#content .line.hl');
+        if (hl) hl.scrollIntoView({block: 'center', behavior: 'smooth'});
+      }
+
+      function buildToolbar(p, lineRange, showDownload) {
+        var name = p.split('/').pop();
+        var html = '<div class="toolbar">';
+        html += '<span class="fname">' + escapeHtml(name);
+        if (lineRange) {
+          html += ' <span style="color:#6b7dff;font-weight:400">L' + lineRange.start;
+          if (lineRange.end !== lineRange.start) html += '-' + lineRange.end;
+          html += '</span>';
+        }
+        html += '</span>';
+        if (showDownload) {
+          var dlUrl = api(p) + '?x-no-fallback';
+          html += '<a class="btn-download" href="' + escapeAttr(dlUrl) + '" download="' + escapeAttr(name) + '">\u2B07 \u4E0B\u8F7D</a>';
+        }
+        html += '</div>';
+        return html;
+      }
+
+      async function showFile(p, lineRange) {
+        currentPath = p;
+        currentLineRange = lineRange || null;
+        searchWrap.style.display = 'none';
+        fileList.innerHTML = '';
+
+        app.innerHTML = buildToolbar(p, lineRange, false) + '<div id="content"><div class="empty">\u52A0\u8F7D\u4E2D...</div></div>';
+        content = document.getElementById('content');
+
+        try {
+          var res = await fetch(api(p));
+          if (!res.ok) throw new Error(res.status);
+          var ct = res.headers.get('Content-Type') || '';
+          var cls = ct.replace(/;.*$/, '').trim();
+          var type = classifyFile(cls);
+          var blen = res.headers.get('Content-Length');
+          var size = blen ? parseInt(blen, 10) : 0;
+          var html = '';
+
+          if (type === 'text') {
+            var text = await res.text();
+            html = buildToolbar(p, lineRange, true) + '<div id="content">' + renderTextContent(text, lineRange) + '</div>';
+          } else if (type === 'image') {
+            html = buildToolbar(p, lineRange, true) + '<div id="content"><img src="' + escapeAttr(api(p)) + '" alt="' + escapeAttr(p.split('/').pop()) + '"></div>';
+          } else {
+            html = buildToolbar(p, lineRange, true);
+            html += '<div id="content"><div class="binary-msg">';
+            html += '<div class="icon">&#128196;</div>';
+            html += '<div class="name">' + escapeHtml(p.split('/').pop()) + '</div>';
+            html += '<div class="size">' + formatSize(size) + ' \u2014 \u4E8C\u8FDB\u5236\u6587\u4EF6\uFF0C\u4E0D\u652F\u6301\u9884\u89C8</div>';
+            html += '</div></div>';
+          }
+
+          app.innerHTML = html;
+          content = document.getElementById('content');
+          fileList = document.getElementById('file-list');
+          searchWrap = document.getElementById('search-wrap');
+          if (lineRange && type === 'text') setTimeout(scrollToLine, 50);
+        } catch (e) {
+          showError(parseInt(e.message, 10) || 500, p);
+          return;
+        }
+
+        pushURL(p, lineRange);
+      }
+
+      async function showDirectory(p) {
+        currentPath = p;
+        currentLineRange = null;
+
+        var toggleText = searchMode === 'content' ? '\u2261' : 'Aa';
+    var toggleTitle = searchMode === 'content' ? '\u5207\u6362\u5230\u6587\u4EF6\u540D\u641C\u7D22' : '\u5207\u6362\u5230\u5185\u5BB9\u641C\u7D22';
+    var html = '<div id="search-wrap"><input type="search" id="search" placeholder="' + (searchMode === 'content' ? '\u641C\u7D22\u6587\u4EF6\u5185\u5BB9...' : '\u641C\u7D22\u6587\u4EF6\u540D...') + '" autocomplete="off"><button id="search-toggle" class="search-toggle' + (searchMode === 'content' ? ' on' : '') + '" title="' + toggleTitle + '">' + toggleText + '</button></div>';
+        html += '<div id="file-list"><div class="empty">\u52A0\u8F7D\u4E2D...</div></div>';
+
+        app.innerHTML = html;
+
+        fileList = document.getElementById('file-list');
+        content = document.getElementById('content');
+        searchWrap = document.getElementById('search-wrap');
+        search = document.getElementById('search');
+        search.addEventListener('input', function () {
+          var query = this.value;
+          clearTimeout(searchTimer);
+          if (query) fileList.innerHTML = '<div class="empty">\u641C\u7D22\u4E2D...</div>';
+          searchTimer = setTimeout(function () {
+            doSearch(query);
+          }, 1000);
+        });
+
+        var toggleBtn = document.getElementById('search-toggle');
+        toggleBtn.addEventListener('click', function () {
+          searchMode = searchMode === 'path' ? 'content' : 'path';
+          var s = document.getElementById('search');
+          var t = document.getElementById('search-toggle');
+          if (searchMode === 'content') {
+            s.placeholder = '\u641C\u7D22\u6587\u4EF6\u5185\u5BB9...';
+            t.textContent = '\u2261';
+            t.title = '\u5207\u6362\u5230\u6587\u4EF6\u540D\u641C\u7D22';
+            t.classList.add('on');
+          } else {
+            s.placeholder = '\u641C\u7D22\u6587\u4EF6\u540D...';
+            t.textContent = 'Aa';
+            t.title = '\u5207\u6362\u5230\u5185\u5BB9\u641C\u7D22';
+            t.classList.remove('on');
+          }
+          if (s.value) {
+            fileList.innerHTML = '<div class="empty">\u641C\u7D22\u4E2D...</div>';
+            doSearch(s.value);
+          }
+        });
+
+        try {
+          var data = await fetchJSON(api(p) + '?depth=' + DEPTH);
+          renderTree(data, p);
+        } catch (e) {
+          showError(parseInt(e.message, 10) || 500, p);
+          return;
+        }
+
+        pushURL(p, null);
+      }
+
+      function flatten(items, parentPath) {
+        var result = [];
+        for (var i = 0; i < items.length; i++) {
+          var item = items[i];
+          if (item.name === 'index.html') continue;
+          var fp = parentPath ? parentPath + '/' + item.name : item.name;
+          if (!item.dir) {
+            result.push({name: item.name, path: fp});
+          }
+          if (item.items && item.items.length > 0) {
+            result = result.concat(flatten(item.items, fp));
+          }
+        }
+        return result;
+      }
+
+      function renderTree(node, basePath) {
+        fileList.innerHTML = '';
+        var items = node && node.items ? node.items : [];
+        var flat = flatten(items, '');
+
+        if (flat.length === 0) {
+          fileList.innerHTML = '<div class="empty">\u65E0\u6587\u4EF6</div>';
+          return;
+        }
+
+        for (var i = 0; i < flat.length; i++) {
+          var item = flat[i];
+          // Show relative path from current directory
+          var displayPath = basePath ? item.path : item.path;
+
+          var el = document.createElement('button');
+          el.className = 'item';
+          el.textContent = displayPath;
+          el.title = displayPath;
+          el.addEventListener('click', function (p, e) {
+            return function () {
+              navigateToFile(p, e);
+            };
+          }(basePath ? basePath + '/' + item.path : item.path, el));
+          fileList.appendChild(el);
+        }
+      }
+
+      function navigateToFile(p, el, lineRange) {
+        if (activeEl) activeEl.classList.remove('active');
+        if (el) {
+          activeEl = el;
+          el.classList.add('active');
+        }
+        showFile(p, lineRange);
+      }
+
+      async function doSearch(query) {
+        if (!query) {
+          showDirectory(currentPath);
+          return;
+        }
+        fileList.innerHTML = '<div class="empty">\u641C\u7D22\u4E2D...</div>';
+        try {
+          var url;
+          if (searchMode === 'content') {
+            url = api(currentPath) + '?glob=**/*&pattern=' + encodeURIComponent(query) + '&limit=30';
+          } else {
+            url = api(currentPath) + '?glob=**/*' + encodeURIComponent(query) + '*&limit=30';
+          }
+          var results = await fetchJSON(url);
+          renderSearchResults(results, currentPath);
+        } catch (e) {
+          fileList.innerHTML = '<div class="empty">\u641C\u7D22\u5931\u8D25</div>';
+        }
+      }
+
+      function renderSearchResults(results, basePath) {
+        fileList.innerHTML = '';
+        if (!Array.isArray(results) || results.length === 0) {
+          fileList.innerHTML = '<div class="empty">\u65E0\u5339\u914D\u7ED3\u679C</div>';
+          return;
+        }
+
+        basePath = basePath || '';
+        var grouped = {};
+        for (var i = 0; i < results.length; i++) {
+          var r = results[i];
+          var fullPath = basePath ? basePath + '/' + r.path : r.path;
+          if (!grouped[fullPath]) grouped[fullPath] = [];
+          grouped[fullPath].push(r);
+        }
+
+        var paths = Object.keys(grouped);
+        for (var p = 0; p < paths.length; p++) {
+          var fpath = paths[p];
+          var matches = grouped[fpath];
+
+          var header = document.createElement('button');
+          header.className = 'item';
+          header.style.fontWeight = '500';
+          header.textContent = fpath;
+          header.title = fpath;
+          header.addEventListener('click', function (fp) {
+            return function () {
+              navigateToFile(fp, this);
+            };
+          }(fpath));
+          fileList.appendChild(header);
+
+          for (var m = 0; m < matches.length; m++) {
+            var match = matches[m];
+            var lineEl = document.createElement('button');
+            lineEl.className = 'search-line';
+
+            var ln = document.createElement('span');
+            ln.className = 'ln';
+            ln.textContent = 'L' + match.line_num;
+            lineEl.appendChild(ln);
+
+            var text = match.line || '';
+            var trimmed = text.replace(/^\s+/, '');
+            var space = text.length - trimmed.length;
+            var display = '';
+            if (space > 0) {
+              display += text.substring(0, Math.min(space, 8)).replace(/ /g, '\u00A0');
+            }
+            display += trimmed;
+            lineEl.appendChild(document.createTextNode(display));
+            lineEl.title = match.line;
+            lineEl.addEventListener('click', function (fp, lnNum) {
+              return function () {
+                navigateToFile(fp, null, {start: lnNum, end: lnNum});
+              };
+            }(fpath, match.line_num));
+            fileList.appendChild(lineEl);
+          }
+        }
+      }
+
+      function escapeHtml(text) {
+        return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+      }
+
+      function escapeAttr(text) {
+        return text.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
+      }
+
+      function showError(code, p) {
+        currentPath = p || '';
+        currentLineRange = null;
+        searchWrap.style.display = 'none';
+        fileList.innerHTML = '';
+
+        var labels = {400: '\u9519\u8BEF\u8BF7\u6C42', 401: '\u672A\u6388\u6743', 403: '\u7981\u6B62\u8BBF\u95EE', 404: '\u9875\u9762\u672A\u627E\u5230', 405: '\u65B9\u6CD5\u4E0D\u5141\u8BB8', 500: '\u670D\u52A1\u5668\u9519\u8BEF'};
+        var label = labels[code] || '\u8BF7\u6C42\u5931\u8D25';
+
+        var html = '<div class="error-page">';
+        html += '<div class="code">' + code + '</div>';
+        html += '<div class="label">' + label + '</div>';
+        if (p) html += '<div class="detail">' + escapeHtml(p) + '</div>';
+        html += '</div>';
+
+        app.innerHTML = html;
+        fileList = document.getElementById('file-list');
+        searchWrap = document.getElementById('search-wrap');
+      }
+
+      // Handle browser back/forward
+      window.addEventListener('popstate', function (e) {
+        var p, lr;
+        if (e.state && e.state.path !== undefined) {
+          p = e.state.path;
+          lr = e.state.lineRange;
+        } else {
+          var st = getURLState();
+          p = st.path;
+          lr = st.lineRange;
+        }
+        if (p === currentPath && JSON.stringify(lr) === JSON.stringify(currentLineRange)) return;
+        if (!p) {showDirectory(''); return;}
+        isFile(p).then(function (yes) {
+          if (yes) showFile(p, lr);
+          else showDirectory(p);
+        });
+      });
+
+      // Initial load
+      var initState = getURLState();
+      if (initState.path) {
+        isFile(initState.path).then(function (yes) {
+          if (yes) showFile(initState.path, initState.lineRange);
+          else showDirectory(initState.path);
+        });
+      } else {
+        showDirectory('');
+      }
+    })();
+  </script>
+</body>
+
+</html>

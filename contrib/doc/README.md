@@ -1,12 +1,8 @@
 # Doc Middleware
 
-`doc` is a middleware for [vigo](https://github.com/veypi/vigo) to serve markdown documentation from `embed.FS` or local file system.
-
-It provides recursive file listing, content retrieval, table of contents (TOC) generation, and section filtering.
+`doc` is a middleware for [vigo](https://github.com/veypi/vigo) that serves embedded markdown documentation as a browsable SPA. It is built on top of the `ufs` module.
 
 ## Usage
-
-### Initialization
 
 ```go
 package main
@@ -22,61 +18,37 @@ var mdFiles embed.FS
 
 func main() {
     router := vigo.NewRouter()
-    
+
     // Mount the doc handler
-    // prefix is the path prefix in the embed.FS (e.g., "docs")
     doc.New(router.SubRouter("/docs"), mdFiles, "docs")
-    
+
     vigo.Run()
 }
 ```
 
-### API Endpoints
+## How it works
 
-The middleware exposes endpoints to navigate and read the documentation.
+- Non-`.md` requests return `index.html`, a single-page application for browsing docs.
+- `.md` file requests return the raw file content (plain text).
+- The SPA calls the same endpoint with `X-No-Fallback: true` header and `?depth=N` parameter to get JSON directory listings for building the file tree.
+- Search uses ufs's `Searcher` interface: `?glob=` for file matching, `?pattern=` for content regex.
+- File content is served raw when `Accept` does not contain `text/html` (e.g., curl), and as the SPA page when it does (browser).
+- The SPA switches between directory tree (empty search) and content search results (typing in the search box).
 
-#### List Directory / Get File Content
+## Options
 
-*   **Path**: `/` or `/*path`
-*   **Method**: `GET`
+```go
+doc.New(router, mdFiles, "docs", &doc.DocOptions{
+    MaxDepth:     5,                     // max directory depth (default 5)
+    CacheControl: "public, max-age=0",   // Cache-Control header
+})
+```
 
-**Query Parameters:**
+## API
 
-| Parameter | Type     | Default | Description                                                                 |
-| :-------- | :------- | :------ | :-------------------------------------------------------------------------- |
-| `depth`   | `int`    | `1`     | Directory traversal depth. `-1` for unlimited recursive listing.            |
-| `toc`     | `bool`   | `false` | If `true`, returns the Table of Contents instead of full content for files. |
-| `from`    | `string` | -       | Start section number (inclusive), e.g., `1.2`.                              |
-| `to`      | `string` | -       | End section number (inclusive), e.g., `1.3.1`.                              |
-
-### Examples
-
-#### 1. List Files (Recursive)
-
-Get all files under the root directory recursively (directories themselves are excluded from the list).
-
-`GET /docs/?depth=-1`
-
-#### 2. Get File Content
-
-Get the content of `intro.md`.
-
-`GET /docs/intro.md`
-
-#### 3. Get Table of Contents (TOC)
-
-Get the TOC of `guide.md`.
-
-`GET /docs/guide.md?toc=1`
-
-#### 4. Filter Content by Section
-
-Get content from section `1.2` to `1.4` (inclusive).
-
-`GET /docs/manual.md?from=1.2&to=1.4`
-
-#### 5. Filter TOC by Section
-
-Get the TOC for section `2` only.
-
-`GET /docs/manual.md?toc=1&from=2&to=2`
+| Path | Description |
+|------|-------------|
+| `GET /docs/` | Returns `index.html` SPA |
+| `GET /docs/readme.md` | Returns file content (plain text) |
+| `GET /docs/?depth=5` + `X-No-Fallback` | JSON directory tree |
+| `GET /docs/?glob=**/*.md&pattern=keyword&limit=30` + `X-No-Fallback` | JSON content search results |

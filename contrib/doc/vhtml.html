@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html>
+
+<head>
+  <meta name="description" content="Doc Browser"
+    details="vhtml doc browser component: <doc-browser path='aa/a.md' depth='5'></doc-browser>" />
+  <title>Doc Browser</title>
+</head>
+
+<style>
+  body {
+    display: block;
+    width: 100%;
+    max-width: 860px;
+    margin: 0 auto;
+    padding: var(--spacing-2xl, 40px) var(--spacing-3xl, 48px);
+    color: var(--text-color, #111827);
+    text-align: left
+  }
+
+  .search-wrap {
+    display: flex;
+    gap: var(--spacing-sm, 8px);
+    margin-bottom: var(--spacing-lg, 24px)
+  }
+
+  .search-wrap input {
+    flex: 1;
+    padding: var(--spacing-sm, 8px) var(--spacing-md, 16px);
+    border: 1px solid var(--border-color, #d1d5db);
+    border-radius: var(--radius-lg, 8px);
+    font-size: var(--font-size-md, 14px);
+    outline: none;
+    transition: border-color var(--transition-base, .2s);
+    background: var(--bg-color-secondary, #fafafa)
+  }
+
+  .search-wrap input:focus {
+    border-color: var(--color-primary, #4361ee);
+    background: var(--bg-color, #fff)
+  }
+
+  .search-wrap .search-toggle {
+    flex-shrink: 0;
+    padding: var(--spacing-xs, 4px) var(--spacing-md, 16px);
+    font-size: var(--font-size-sm, 13px);
+    color: var(--text-color-secondary, #666);
+    background: none;
+    border: 1px solid var(--border-color, #d1d5db);
+    border-radius: var(--radius-md, 6px);
+    cursor: pointer;
+    transition: all var(--transition-fast, .15s);
+    white-space: nowrap
+  }
+
+  .search-wrap .search-toggle:hover {
+    border-color: var(--color-primary, #4361ee);
+    color: var(--color-primary, #4361ee)
+  }
+
+  .search-wrap .search-toggle.on {
+    background: var(--color-primary, #4361ee);
+    border-color: var(--color-primary, #4361ee);
+    color: var(--color-primary-text, #fff)
+  }
+
+  .toolbar {
+    display: flex;
+    align-items: center;
+    gap: var(--spacing-sm, 8px);
+    margin-bottom: var(--spacing-lg, 24px);
+    padding-bottom: var(--spacing-md, 16px);
+    border-bottom: 1px solid var(--border-color, #e0e0e0);
+    text-align: left
+  }
+
+  .toolbar .fname {
+    font-size: var(--font-size-lg, 16px);
+    font-weight: var(--font-weight-medium, 500);
+    flex: 1;
+    text-align: left
+  }
+
+  .toolbar .btn-download {
+    padding: var(--spacing-xs, 4px) var(--spacing-md, 16px);
+    font-size: var(--font-size-sm, 13px);
+    color: var(--text-color, #333);
+    background: none;
+    border: 1px solid var(--border-color, #d1d5db);
+    border-radius: var(--radius-md, 6px);
+    text-decoration: none;
+    transition: all var(--transition-fast, .15s);
+    cursor: pointer
+  }
+
+  .toolbar .btn-download:hover {
+    background: var(--bg-color-tertiary, #f0f0f0);
+    border-color: var(--border-color-hover, #9ca3af)
+  }
+
+  .file-list {
+    margin-top: var(--spacing-sm, 8px);
+    text-align: left;
+    overflow: hidden
+  }
+
+  .file-list .item {
+    display: block;
+    width: 100%;
+    padding: var(--spacing-sm, 8px) var(--spacing-md, 16px);
+    cursor: pointer;
+    font-size: var(--font-size-md, 14px);
+    line-height: 1.5;
+    color: var(--text-color-secondary, #444);
+    border: none;
+    background: none;
+    text-align: left;
+    border-radius: var(--radius-md, 6px);
+    transition: background var(--transition-fast, .1s);
+    margin-bottom: 1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap
+  }
+
+  .file-list .item:hover {
+    background: var(--bg-color-tertiary, #f0f0f5)
+  }
+
+  .file-list .search-file {
+    font-weight: var(--font-weight-medium, 500);
+    color: var(--text-color, #333);
+    padding: var(--spacing-sm, 8px) var(--spacing-md, 16px) var(--spacing-xs, 4px);
+    font-size: var(--font-size-md, 14px);
+    margin-top: var(--spacing-sm, 8px);
+    cursor: pointer;
+    text-align: left;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap
+  }
+
+  .file-list .search-file:hover {
+    color: var(--color-primary, #4361ee)
+  }
+
+  .file-list .search-line {
+    display: block;
+    width: 100%;
+    padding: var(--spacing-xs, 4px) var(--spacing-md, 16px) var(--spacing-xs, 4px) 36px;
+    cursor: pointer;
+    font-size: var(--font-size-sm, 13px);
+    line-height: 1.7;
+    color: var(--text-color-tertiary, #666);
+    border: none;
+    background: none;
+    text-align: left;
+    border-radius: var(--radius-sm, 4px);
+    transition: background var(--transition-fast, .1s);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap
+  }
+
+  .file-list .search-line:hover {
+    background: var(--bg-color-tertiary, #f0f0f5)
+  }
+
+  .file-list .search-line .ln {
+    color: var(--text-color-disabled, #999);
+    margin-right: var(--spacing-sm, 8px);
+    font-size: var(--font-size-xs, 11px);
+    font-family: var(--font-mono, ui-monospace, monospace)
+  }
+
+  .empty {
+    padding: var(--spacing-xl, 32px) var(--spacing-md, 16px);
+    color: var(--text-color-disabled, #999);
+    font-size: var(--font-size-md, 14px);
+    text-align: center
+  }
+
+  .content {
+    margin-top: var(--spacing-md, 16px);
+    text-align: left
+  }
+
+  .content pre {
+    font-family: var(--font-mono, ui-monospace, monospace);
+    font-size: var(--font-size-md, 14px);
+    line-height: 1.75;
+    white-space: pre-wrap;
+    word-break: break-word;
+    tab-size: 4
+  }
+
+  .content pre.line-numbers {
+    counter-reset: ln
+  }
+
+  .content pre.line-numbers .line {
+    display: block;
+    padding-left: 52px;
+    position: relative;
+    min-height: 1.75em
+  }
+
+  .content pre.line-numbers .line::before {
+    counter-increment: ln;
+    content: counter(ln);
+    position: absolute;
+    left: 0;
+    width: 40px;
+    text-align: right;
+    color: var(--text-color-disabled, #bbb);
+    font-size: var(--font-size-xs, 12px);
+    padding-right: 12px;
+    user-select: none
+  }
+
+  .content pre.line-numbers .line.hl {
+    background: var(--color-warning, #fff3cd);
+    border-radius: var(--radius-sm, 2px)
+  }
+
+  .content pre.line-numbers .line.hl::before {
+    color: var(--text-color, #111827)
+  }
+
+  .content img {
+    max-width: 100%;
+    height: auto;
+    border-radius: var(--radius-sm, 4px)
+  }
+
+  .binary-msg {
+    text-align: center;
+    margin-top: 60px;
+    padding: var(--spacing-2xl, 40px);
+    color: var(--text-color-tertiary, #888)
+  }
+
+  .binary-msg .icon {
+    font-size: 48px;
+    margin-bottom: var(--spacing-md, 16px)
+  }
+
+  .binary-msg .name {
+    font-size: var(--font-size-lg, 15px);
+    color: var(--text-color-secondary, #555);
+    margin-bottom: var(--spacing-sm, 12px)
+  }
+
+  .binary-msg .size {
+    font-size: var(--font-size-sm, 13px);
+    color: var(--text-color-disabled, #999)
+  }
+
+  .error-page {
+    text-align: center;
+    padding: 100px var(--spacing-2xl, 40px)
+  }
+
+  .error-page .code {
+    font-size: 72px;
+    font-weight: var(--font-weight-bold, 700);
+    color: var(--border-color, #ddd);
+    line-height: 1
+  }
+
+  .error-page .label {
+    font-size: var(--font-size-xl, 18px);
+    color: var(--text-color-secondary, #555);
+    margin-top: var(--spacing-sm, 12px)
+  }
+
+  .error-page .detail {
+    font-size: var(--font-size-sm, 13px);
+    color: var(--text-color-disabled, #999);
+    margin-top: var(--spacing-xs, 6px)
+  }
+
+  @media(max-width:700px) {
+    body {
+      padding: 20px var(--spacing-md, 16px)
+    }
+  }
+</style>
+
+<body>
+  <!-- error -->
+  <div v-if="error" class="error-page">
+    <div class="code">{{ error.code }}</div>
+    <div class="label">{{ error.label }}</div>
+    <div v-if="error.detail" class="detail">{{ error.detail }}</div>
+  </div>
+
+  <!-- loading -->
+  <div v-else-if="loading" class="empty">加载中...</div>
+
+  <!-- directory mode -->
+  <template v-else-if="mode === 'dir'">
+    <div class="search-wrap">
+      <input type="search" v:value="searchQuery" @input="onSearchInput"
+        :placeholder="searchMode === 'content' ? '搜索文件内容...' : '搜索文件名...'" autocomplete="off" />
+      <button class="search-toggle" :class="searchMode === 'content' ? 'on' : ''" @click="toggleSearchMode"
+        :title="searchMode === 'content' ? '切换到文件名搜索' : '切换到内容搜索'">{{ searchMode === 'content' ? '\u2261' : 'Aa'
+        }}</button>
+    </div>
+    <div v-if="searchLoading" class="empty">搜索中...</div>
+    <div v-else-if="hasSearchResults" class="file-list">
+      <template v-for="group in searchResults">
+        <div class="search-file" @click="onClickFile(group.path)">{{ group.display }}</div>
+        <button v-for="match in group.matches" class="search-line" @click="onClickLine(group.path, match.line_num)">
+          <span class="ln">L{{ match.line_num }}</span>{{ match.line }}
+        </button>
+      </template>
+    </div>
+    <div v-else class="file-list">
+      <button v-for="f in files" class="item" @click="onClickFile(f.path)">{{ f.display }}</button>
+      <div v-if="files.length === 0" class="empty">无文件</div>
+    </div>
+  </template>
+
+  <!-- file mode -->
+  <template v-else-if="mode === 'file'">
+    <div class="toolbar">
+      <span class="fname">{{ fileName }}
+        <span v-if="lineLabel" style="color:#6b7dff;font-weight:400">{{ lineLabel }}</span>
+      </span>
+      <a class="btn-download" :href="downloadUrl" :download="fileName">下载</a>
+    </div>
+    <div class="content">
+      <!-- text with line numbers -->
+      <pre v-if="fileType === 'text'" class="line-numbers">
+        <span v-for="(line, i) in fileLines" :class="'line' + (isLineHL(i) ? ' hl' : '')" :id="idPrefix + (i + 1)">{{
+          line }}</span>
+      </pre>
+      <!-- image -->
+      <img v-else-if="fileType === 'image'" :src="api(path)" :alt="fileName" />
+      <!-- binary -->
+      <div v-else class="binary-msg">
+        <div class="icon">&#128196;</div>
+        <div class="name">{{ fileName }}</div>
+        <div class="size">{{ fileSize }} — 二进制文件，不支持预览</div>
+      </div>
+    </div>
+  </template>
+</body>
+
+<script setup>
+  // === props ===
+  // <doc-browser path="aa/a.md" depth="5"></doc-browser>
+  path = "";
+  depth = 5;
+
+  // === reactive state ===
+  idPrefix = 'L' + Math.random().toString(36).slice(2, 8) + '_';
+  mode = "dir";
+  loading = true;
+  error = null;
+  files = [];
+  fileContent = "";
+  fileName = "";
+  fileType = "";
+  fileSize = "";
+  searchQuery = "";
+  searchResults = null;
+  searchTimer = null;
+  searchLoading = false;
+  searchMode = "path";
+  lineRange = null;
+  fileLines = [];
+  lineLabel = "";
+  downloadUrl = "";
+
+  // === helpers (local) ===
+  const ERROR_LABELS = {400: '错误请求', 401: '未授权', 403: '禁止访问', 404: '页面未找到', 405: '方法不允许', 500: '服务器错误'};
+
+  api = (p) => p
+
+  const classifyFile = (ct) => {
+    if (!ct) return 'binary';
+    if (ct.startsWith('text/') || ct.startsWith('application/json') || ct.startsWith('application/xml') ||
+      ct.startsWith('application/javascript') || ct.startsWith('application/typescript') ||
+      ct.startsWith('message/') || ct === 'application/x-sh' || ct === 'application/x-yaml' ||
+      ct === 'application/x-httpd-php' || ct === 'application/ld+json') return 'text';
+    if (ct.startsWith('image/')) return 'image';
+    return 'binary';
+  };
+
+  const formatSize = (bytes) => {
+    if (!bytes) return '0 B';
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / 1048576).toFixed(1) + ' MB';
+  };
+
+  const flatten = (items, parent) => {
+    const result = [];
+    for (const item of items) {
+      if (item.name === 'index.html') continue;
+      const fp = parent ? parent + '/' + item.name : item.name;
+      if (!item.dir) result.push({path: fp, name: item.name});
+      if (item.items?.length > 0) result.push(...flatten(item.items, fp));
+    }
+    return result;
+  };
+
+  // === public methods ===
+  isLineHL = (i) => {
+    if (!lineRange) return false;
+    const ln = i + 1;
+    return ln >= lineRange.start && ln <= lineRange.end;
+  };
+
+  onClickFile = (p) => {
+    path = p;
+    downloadUrl = api(p) + '?x-no-fallback';
+  };
+
+  onClickLine = (p, ln) => {
+    path = p + '@L=' + ln;
+    downloadUrl = api(p) + '?x-no-fallback';
+    loadFile(p, {start: ln, end: ln});
+  };
+
+  toggleSearchMode = () => {
+    searchMode = searchMode === 'path' ? 'content' : 'path';
+    if (searchQuery) {
+      searchLoading = true;
+      hasSearchResults = false;
+      clearTimeout(searchTimer);
+      doSearch();
+    }
+  };
+
+  onSearchInput = () => {
+    searchLoading = true;
+    hasSearchResults = false;
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(() => doSearch(), 500);
+  };
+
+  hasSearchResults = false;
+
+  doSearch = async () => {
+    const q = searchQuery;
+    if (!q) {searchResults = null; hasSearchResults = false; searchLoading = false; return;}
+    try {
+      const searchRoot = path || '';
+      let url;
+      if (searchMode === 'content') {
+        url = api(searchRoot) + '?glob=**/*&pattern=' + encodeURIComponent(q) + '&limit=30';
+      } else {
+        url = api(searchRoot) + '?glob=**/*' + encodeURIComponent(q) + '*&limit=30';
+      }
+      const res = await fetch(url, {headers: {'X-No-Fallback': 'true'}});
+      if (!res.ok) throw new Error(String(res.status));
+      const results = await res.json();
+      const grouped = new Map();
+      for (const r of results) {
+        const fullPath = searchRoot ? searchRoot + '/' + r.path : r.path;
+        if (!grouped.has(fullPath)) {
+          grouped.set(fullPath, {display: r.path, path: fullPath, matches: []});
+        }
+        grouped.get(fullPath).matches.push(r);
+      }
+      searchResults = Array.from(grouped.values());
+      hasSearchResults = searchResults.length > 0;
+      searchLoading = false;
+    } catch (e) {
+      searchResults = null;
+      hasSearchResults = false;
+      searchLoading = false;
+    }
+  };
+
+  checkFile = async (p) => {
+    try {
+      const res = await fetch(api(p) + '?x-no-fallback', {method: 'HEAD'});
+      if (!res.ok) return false;
+      return !(res.headers.get('Content-Type') || '').includes('application/json');
+    } catch (e) {return false;}
+  };
+
+  loadDir = async (p) => {
+    try {
+      const url = api(p) + '?depth=' + depth;
+      const res = await fetch(url, {headers: {'X-No-Fallback': 'true'}});
+      if (!res.ok) throw new Error(String(res.status));
+      const data = await res.json();
+      const flat = flatten(data.items || [], '');
+      files = flat.map(f => ({
+        path: p ? p + '/' + f.path : f.path,
+        display: p ? f.path : f.path
+      }));
+      mode = 'dir';
+      searchResults = null;
+      searchLoading = false;
+      searchQuery = '';
+      error = null;
+      loading = false;
+    } catch (e) {
+      error = {code: parseInt(e.message, 10) || 500, label: ERROR_LABELS[parseInt(e.message, 10)] || '加载失败', detail: p || ''};
+      loading = false;
+    }
+  };
+
+  loadFile = async (p, lr) => {
+    try {
+      const res = await fetch(api(p));
+      if (!res.ok) throw new Error(String(res.status));
+      const ct = (res.headers.get('Content-Type') || '').replace(/;.*$/, '').trim();
+      const type = classifyFile(ct);
+      const blen = res.headers.get('Content-Length');
+      const size = blen ? parseInt(blen, 10) : 0;
+
+      fileName = p.split('/').pop();
+      fileType = type;
+      fileSize = formatSize(size);
+      lineRange = lr || null;
+
+      if (lr) {
+        lineLabel = lr.start === lr.end ? ' L' + lr.start : ' L' + lr.start + '-' + lr.end;
+      } else {
+        lineLabel = '';
+      }
+
+      if (type === 'text') {
+        fileContent = await res.text();
+        fileLines = fileContent.split('\n');
+      }
+      mode = 'file';
+      error = null;
+      loading = false;
+
+      if (lr && type === 'text') {
+        setTimeout(() => {
+          const hl = document.querySelector('.line.hl');
+          if (hl) hl.scrollIntoView({block: 'center', behavior: 'smooth'});
+        }, 50);
+      }
+    } catch (e) {
+      error = {code: parseInt(e.message, 10) || 500, label: ERROR_LABELS[parseInt(e.message, 10)] || '加载失败', detail: p};
+      loading = false;
+    }
+  };
+
+  load = async () => {
+    console.log('loading ' + path)
+    error = null;
+    loading = true;
+    if (!path) {
+      downloadUrl = '';
+      return loadDir('');
+    }
+    // Parse @L=xx-xx or @L=xx suffix from path
+    let filePath = path;
+    let lr = null;
+    const m = path.match(/@L=(\d+)(?:-(\d+))?$/);
+    if (m) {
+      filePath = path.substring(0, m.index);
+      const start = parseInt(m[1], 10);
+      lr = {start, end: m[2] !== undefined ? parseInt(m[2], 10) : start};
+    }
+    downloadUrl = api(filePath) + '?x-no-fallback';
+    const yes = await checkFile(filePath);
+    if (yes) return loadFile(filePath, lr);
+    return loadDir(filePath);
+  };
+</script>
+
+<script>
+  $watch(() => path, load)
+</script>
+
+</html>
