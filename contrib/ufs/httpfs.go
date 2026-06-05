@@ -8,9 +8,11 @@
 package ufs
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"html/template"
 	"io"
 	"io/fs"
 	"mime"
@@ -25,12 +27,28 @@ import (
 	"github.com/veypi/vigo/logv"
 )
 
-// defaultFileInfo holds pre-computed metadata for a default/fallback file.
-type defaultFileInfo struct {
-	path    string
+// =============================================================================
+// Types
+// =============================================================================
+
+// spaFile holds pre-computed SPA metadata and content.
+// If attrsFn is non-nil, content is the raw (untemplated) text and
+// the template is resolved lazily on the first SPA request.
+type spaFile struct {
 	name    string
-	modTime time.Time
+	content []byte
 	etag    string
+	modTime time.Time
+
+	once    sync.Once
+	attrsFn func() map[string]any // nil after lazy resolution
+}
+
+// spaConfig is the raw configuration before SPA resolution.
+type spaConfig struct {
+	name    string
+	content []byte                // nil = read from file at resolve time
+	attrsFn func() map[string]any // lazy template vars (nil = no templating)
 }
 
 // PathFunc extracts the raw file path from a request context.
@@ -39,12 +57,10 @@ type defaultFileInfo struct {
 // Default: returns x.PathParams.Get("path").
 type PathFunc func(*vigo.X) (string, error)
 
-// defaultPathFunc extracts path from route params.
 func defaultPathFunc(x *vigo.X) (string, error) {
 	return x.PathParams.Get("path"), nil
 }
 
-// resolvePath extracts the raw path via PathFunc, then cleans and validates it.
 func resolvePath(x *vigo.X, op string, pf PathFunc) (string, error) {
 	if pf == nil {
 		pf = defaultPathFunc
@@ -56,134 +72,140 @@ func resolvePath(x *vigo.X, op string, pf PathFunc) (string, error) {
 	return validatePath(p, op)
 }
 
-// HandlerOptions configures the HTTP handler behavior for read operations.
+// HandlerOptions configures the HTTP handler behavior for both read-only and read/write handlers.
+// Write-specific fields (AllowPut, etc.) are ignored by NewHandler.
 type HandlerOptions struct {
-	// CacheControl sets the Cache-Control header
-	// Default: "public, max-age=0, must-revalidate"
 	CacheControl string
+	ETagCache    map[string]string
+	PathFunc     PathFunc
+	MaxDepth     int
+	AllowSearch  bool
 
-	// ETagCache is a map of pre-computed ETags (path -> etag)
-	// Used by EmbedFS to avoid runtime ETag calculation
-	ETagCache map[string]string
-
-	// PathFunc extracts the file path from the request context.
-	// Default: x.PathParams.Get("path")
-	PathFunc PathFunc
-
-	// MaxDepth controls the maximum directory listing depth (1-5).
-	// 0 means directory GET is disabled (returns 403 Forbidden).
-	// Default: 0
-	MaxDepth int
-
-	// AllowSearch enables the ?glob= query parameter for file/content search via Searcher.
-	// When false (default), ?glob= requests return 403 Forbidden.
-	AllowSearch bool
-}
-
-// RWOptions configures the HTTP handler behavior for read/write operations.
-type RWOptions struct {
-	HandlerOptions
-
-	// AllowPut enables PUT method for file upload/overwrite
-	AllowPut bool
-
-	// AllowDelete enables DELETE method for file/directory removal
+	AllowPut    bool
 	AllowDelete bool
-
-	// AllowMkdir enables POST method for directory creation
-	AllowMkdir bool
-
-	// AllowRename enables PATCH method for rename/move
+	AllowMkdir  bool
 	AllowRename bool
-
-	// MaxFileSize is the maximum upload size in bytes (0 = unlimited)
 	MaxFileSize int64
+
+	spaCfg  *spaConfig
+	spa     *spaFile
+	spaOnce sync.Once
 }
 
-// DefaultHandlerOptions returns default options for read-only handlers.
-func DefaultHandlerOptions() *HandlerOptions {
-	return &HandlerOptions{
-		CacheControl: "public, max-age=0, must-revalidate",
-		ETagCache:    nil,
+// HttpOption is a functional option for HandlerOptions.
+type HttpOption func(*HandlerOptions)
+
+// =============================================================================
+// Option functions
+// =============================================================================
+
+// WithSpa enables SPA fallback. When a browser (Accept: text/html) requests a
+// non-existent path or directory, the SPA file is served instead.
+//
+//	content == nil → name is treated as a file path, read from the FS at construction.
+//	content != nil → content is used directly as the SPA body.
+//	resolver != nil → the content is executed as a Go template with the resolver's
+//	                   return value as the data context. The resolver is called once,
+//	                   lazily on the first SPA request — use this when template values
+//	                   are not known at construction time (e.g., router prefix).
+func WithSpa(name string, content []byte, resolver ...func() map[string]any) HttpOption {
+	var fn func() map[string]any
+	if len(resolver) > 0 {
+		fn = resolver[0]
+	}
+	return func(o *HandlerOptions) {
+		o.spaCfg = &spaConfig{
+			name:    name,
+			content: content,
+			attrsFn: fn,
+		}
 	}
 }
 
-// DefaultRWOptions returns default options for read/write handlers.
-func DefaultRWOptions() *RWOptions {
-	return &RWOptions{
-		HandlerOptions: *DefaultHandlerOptions(),
-		AllowPut:       true,
-		AllowDelete:    true,
-		AllowMkdir:     true,
-		AllowRename:    true,
-		MaxFileSize:    0,
-	}
+func WithCacheControl(v string) HttpOption {
+	return func(o *HandlerOptions) { o.CacheControl = v }
 }
 
-// mergeOptions merges provided options with defaults.
-func mergeOptions(opts []*HandlerOptions) *HandlerOptions {
-	result := DefaultHandlerOptions()
-	for _, opt := range opts {
-		if opt == nil {
-			continue
-		}
-		if opt.CacheControl != "" {
-			result.CacheControl = opt.CacheControl
-		}
-		if opt.ETagCache != nil {
-			result.ETagCache = opt.ETagCache
-		}
-		if opt.PathFunc != nil {
-			result.PathFunc = opt.PathFunc
-		}
-		if opt.MaxDepth > 0 {
-			result.MaxDepth = opt.MaxDepth
-		}
-		if opt.AllowSearch {
-			result.AllowSearch = true
-		}
-	}
-	return result
+func WithMaxDepth(d int) HttpOption {
+	return func(o *HandlerOptions) { o.MaxDepth = d }
 }
 
-// mergeRWOptions merges provided RWOptions with defaults.
-func mergeRWOptions(opts []*RWOptions) *RWOptions {
-	result := DefaultRWOptions()
-	for _, opt := range opts {
-		if opt == nil {
-			continue
-		}
-		if opt.CacheControl != "" {
-			result.CacheControl = opt.CacheControl
-		}
-		if opt.ETagCache != nil {
-			result.ETagCache = opt.ETagCache
-		}
-		if opt.PathFunc != nil {
-			result.PathFunc = opt.PathFunc
-		}
-		if opt.MaxDepth > 0 {
-			result.MaxDepth = opt.MaxDepth
-		}
-		if opt.AllowSearch {
-			result.AllowSearch = true
-		}
-		if opt.MaxFileSize > 0 {
-			result.MaxFileSize = opt.MaxFileSize
-		} else if opt.MaxFileSize < 0 {
-			result.MaxFileSize = 0
-		}
-		if opt.AllowPut || opt.AllowDelete || opt.AllowMkdir || opt.AllowRename {
-			result.AllowPut = opt.AllowPut
-			result.AllowDelete = opt.AllowDelete
-			result.AllowMkdir = opt.AllowMkdir
-			result.AllowRename = opt.AllowRename
-		}
-	}
-	return result
+func WithAllowSearch(v bool) HttpOption {
+	return func(o *HandlerOptions) { o.AllowSearch = v }
 }
 
-// getETag returns the ETag for a file, using cache if available.
+func WithPathFunc(pf PathFunc) HttpOption {
+	return func(o *HandlerOptions) { o.PathFunc = pf }
+}
+
+func WithETagCache(m map[string]string) HttpOption {
+	return func(o *HandlerOptions) { o.ETagCache = m }
+}
+
+func WithPut(v bool) HttpOption {
+	return func(o *HandlerOptions) { o.AllowPut = v }
+}
+
+func WithDelete(v bool) HttpOption {
+	return func(o *HandlerOptions) { o.AllowDelete = v }
+}
+
+func WithMkdir(v bool) HttpOption {
+	return func(o *HandlerOptions) { o.AllowMkdir = v }
+}
+
+func WithRename(v bool) HttpOption {
+	return func(o *HandlerOptions) { o.AllowRename = v }
+}
+
+func WithMaxFileSize(n int64) HttpOption {
+	return func(o *HandlerOptions) { o.MaxFileSize = n }
+}
+
+// =============================================================================
+// SPA resolution (construction time)
+// =============================================================================
+
+func resolveSpa(fsys fs.FS, cfg *spaConfig) (*spaFile, error) {
+	var (
+		content []byte
+		modTime time.Time
+	)
+
+	if cfg.content == nil {
+		f, err := fsys.Open(cfg.name)
+		if err != nil {
+			return nil, err
+		}
+		defer f.Close()
+		stat, err := f.Stat()
+		if err != nil {
+			return nil, err
+		}
+		modTime = stat.ModTime()
+		content, err = io.ReadAll(f)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		content = cfg.content
+		modTime = time.Now()
+	}
+
+	spa := &spaFile{
+		name:    cfg.name,
+		content: content,
+		etag:    generateETag(int64(len(content)), modTime),
+		modTime: modTime,
+		attrsFn: cfg.attrsFn,
+	}
+	return spa, nil
+}
+
+// =============================================================================
+// Cache helpers
+// =============================================================================
+
 func getETag(filePath string, info fs.FileInfo, cache map[string]string) string {
 	if cache != nil {
 		if etag, ok := cache[filePath]; ok {
@@ -193,38 +215,25 @@ func getETag(filePath string, info fs.FileInfo, cache map[string]string) string 
 	return generateETag(info.Size(), info.ModTime())
 }
 
-// checkNotModified checks if the request has matching If-None-Match or If-Modified-Since headers.
-// Returns true if the response should be 304 Not Modified.
 func checkNotModified(r *http.Request, etag string, modTime time.Time) bool {
 	if inm := r.Header.Get("If-None-Match"); inm != "" {
 		return inm == etag || inm == "*"
 	}
-
 	if ims := r.Header.Get("If-Modified-Since"); ims != "" {
 		if imsTime, err := http.ParseTime(ims); err == nil {
 			return !modTime.After(imsTime)
 		}
 	}
-
 	return false
 }
 
-// setCacheHeaders sets common cache-related headers.
 func setCacheHeaders(w http.ResponseWriter, etag string, modTime time.Time, cacheControl string) {
 	w.Header().Set("ETag", etag)
 	w.Header().Set("Last-Modified", modTime.UTC().Format(http.TimeFormat))
 	w.Header().Set("Cache-Control", cacheControl)
 }
 
-// skipFallback returns true when the default file fallback should be skipped.
-// Always true when df is nil (no fallback configured).
-// When df is set, fallback is skipped for:
-//   - X-No-Fallback header or ?x-no-fallback query param
-//   - Accept header does not contain text/html (non-browser client like curl)
-func skipFallback(x *vigo.X, df *defaultFileInfo) bool {
-	if df == nil {
-		return true
-	}
+func skipFallback(x *vigo.X) bool {
 	if x.Request.Header.Get("X-No-Fallback") != "" {
 		return true
 	}
@@ -238,8 +247,10 @@ func skipFallback(x *vigo.X, df *defaultFileInfo) bool {
 	return !strings.Contains(accept, "text/html")
 }
 
-// parseSearchParams extracts search parameters from the query string.
-// Returns glob, pattern, limit, ignoreCase, and whether a search was requested (glob != "").
+// =============================================================================
+// Search helpers
+// =============================================================================
+
 func parseSearchParams(r *http.Request) (glob, pattern string, limit int, ignoreCase, ok bool) {
 	q := r.URL.Query()
 	glob = q.Get("glob")
@@ -254,8 +265,6 @@ func parseSearchParams(r *http.Request) (glob, pattern string, limit int, ignore
 	return glob, pattern, limit, ignoreCase, true
 }
 
-// trySearch checks for a ?glob= search request and handles it via Searcher.
-// Returns true if the request was handled (search was requested).
 func trySearch(x *vigo.X, filesystem fs.FS, searchPath string, options *HandlerOptions) bool {
 	glob, pattern, limit, ignoreCase, ok := parseSearchParams(x.Request)
 	if !ok {
@@ -265,12 +274,7 @@ func trySearch(x *vigo.X, filesystem fs.FS, searchPath string, options *HandlerO
 		x.WriteHeader(http.StatusForbidden)
 		return true
 	}
-	searcher, ok := filesystem.(Searcher)
-	if !ok {
-		x.WriteHeader(http.StatusNotImplemented)
-		return true
-	}
-	results, err := searcher.Search(searchPath, glob, pattern, limit, ignoreCase)
+	results, err := Search(filesystem, searchPath, glob, pattern, limit, ignoreCase)
 	if err != nil {
 		x.WriteHeader(http.StatusBadRequest)
 		return true
@@ -280,10 +284,62 @@ func trySearch(x *vigo.X, filesystem fs.FS, searchPath string, options *HandlerO
 }
 
 // =============================================================================
-// Internal: GET / HEAD handlers
+// SPA serving
 // =============================================================================
 
-// handleGet serves a file or directory listing for GET requests.
+// resolveSpaLazy executes the deferred SPA template resolution on first call.
+func resolveSpaLazy(spa *spaFile) {
+	spa.once.Do(func() {
+		if spa.attrsFn == nil {
+			return
+		}
+		vars := spa.attrsFn()
+		tmpl, err := template.New(spa.name).Parse(string(spa.content))
+		if err != nil {
+			logv.Warn().Msgf("ufs: SPA template parse %q: %v", spa.name, err)
+			return
+		}
+		var buf bytes.Buffer
+		if err := tmpl.Execute(&buf, vars); err != nil {
+			logv.Warn().Msgf("ufs: SPA template execute %q: %v", spa.name, err)
+			return
+		}
+		spa.content = buf.Bytes()
+		spa.etag = generateETag(int64(len(spa.content)), time.Now())
+		spa.attrsFn = nil
+	})
+}
+
+func serveSpa(x *vigo.X, spa *spaFile, options *HandlerOptions) {
+	resolveSpaLazy(spa)
+
+	if checkNotModified(x.Request, spa.etag, spa.modTime) {
+		x.WriteHeader(http.StatusNotModified)
+		return
+	}
+	x.Header().Set("Content-Type", "text/html; charset=utf-8")
+	setCacheHeaders(x.ResponseWriter(), spa.etag, spa.modTime, options.CacheControl)
+	x.WriteHeader(http.StatusOK)
+	x.Write(spa.content)
+}
+
+func serveSpaHead(x *vigo.X, spa *spaFile, options *HandlerOptions) {
+	resolveSpaLazy(spa)
+
+	if checkNotModified(x.Request, spa.etag, spa.modTime) {
+		x.WriteHeader(http.StatusNotModified)
+		return
+	}
+	x.Header().Set("Content-Type", "text/html; charset=utf-8")
+	x.Header().Set("Content-Length", strconv.Itoa(len(spa.content)))
+	setCacheHeaders(x.ResponseWriter(), spa.etag, spa.modTime, options.CacheControl)
+	x.WriteHeader(http.StatusOK)
+}
+
+// =============================================================================
+// GET / HEAD handlers
+// =============================================================================
+
 func handleGet(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 	p, err := resolvePath(x, "open", options.PathFunc)
 	if err != nil {
@@ -297,66 +353,8 @@ func handleGet(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 
 	file, err := filesystem.Open(p)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			x.WriteHeader(http.StatusNotFound)
-			return
-		}
-		if errors.Is(err, fs.ErrPermission) {
-			x.WriteHeader(http.StatusForbidden)
-			return
-		}
-		x.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	defer file.Close()
-
-	stat, err := file.Stat()
-	if err != nil {
-		x.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	if stat.IsDir() {
-		if options.MaxDepth <= 0 {
-			x.WriteHeader(http.StatusForbidden)
-			return
-		}
-		depth := parseDepth(x.Request, options)
-		serveDirList(x, filesystem, p, stat, depth)
-		return
-	}
-
-	if rs, ok := file.(io.ReadSeeker); ok {
-		etag := getETag(p, stat, options.ETagCache)
-
-		if checkNotModified(x.Request, etag, stat.ModTime()) {
-			x.WriteHeader(http.StatusNotModified)
-			return
-		}
-
-		setCacheHeaders(x.ResponseWriter(), etag, stat.ModTime(), options.CacheControl)
-		http.ServeContent(x.ResponseWriter(), x.Request, stat.Name(), stat.ModTime(), rs)
-		return
-	}
-	x.WriteHeader(http.StatusInternalServerError)
-}
-
-// handleGetWithDefault serves GET requests with SPA-style fallback to a default file.
-func handleGetWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions, df *defaultFileInfo) {
-	p, err := resolvePath(x, "open", options.PathFunc)
-	if err != nil {
-		x.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	if trySearch(x, filesystem, p, options) {
-		return
-	}
-
-	file, err := filesystem.Open(p)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) && !skipFallback(x, df) {
-			serveDefaultFile(x, filesystem, df, options)
+		if errors.Is(err, fs.ErrNotExist) && options.spa != nil && !skipFallback(x) {
+			serveSpa(x, options.spa, options)
 			return
 		}
 		if errors.Is(err, fs.ErrNotExist) {
@@ -379,33 +377,29 @@ func handleGetWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions, 
 	}
 
 	if stat.IsDir() {
-		if !skipFallback(x, df) {
-			serveDefaultFile(x, filesystem, df, options)
+		if options.spa != nil && !skipFallback(x) {
+			serveSpa(x, options.spa, options)
 			return
 		}
 		if options.MaxDepth <= 0 {
 			x.WriteHeader(http.StatusForbidden)
 			return
 		}
-		depth := parseDepth(x.Request, options)
-		serveDirList(x, filesystem, p, stat, depth)
+		serveDirList(x, filesystem, p, stat, parseDepth(x.Request, options))
 		return
 	}
 
-	// Browser (no X-No-Fallback, Accept: text/html) → serve SPA
-	if !skipFallback(x, df) {
-		serveDefaultFile(x, filesystem, df, options)
+	if options.spa != nil && !skipFallback(x) {
+		serveSpa(x, options.spa, options)
 		return
 	}
 
 	if rs, ok := file.(io.ReadSeeker); ok {
 		etag := getETag(p, stat, options.ETagCache)
-
 		if checkNotModified(x.Request, etag, stat.ModTime()) {
 			x.WriteHeader(http.StatusNotModified)
 			return
 		}
-
 		setCacheHeaders(x.ResponseWriter(), etag, stat.ModTime(), options.CacheControl)
 		http.ServeContent(x.ResponseWriter(), x.Request, stat.Name(), stat.ModTime(), rs)
 		return
@@ -413,7 +407,6 @@ func handleGetWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions, 
 	x.WriteHeader(http.StatusInternalServerError)
 }
 
-// handleHead serves HEAD requests (headers only, no body).
 func handleHead(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 	p, err := resolvePath(x, "open", options.PathFunc)
 	if err != nil {
@@ -421,85 +414,20 @@ func handleHead(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 		return
 	}
 
-	// HEAD with search params: just return 200 with JSON content type
 	if _, _, _, _, ok := parseSearchParams(x.Request); ok {
-		if _, isSearcher := filesystem.(Searcher); isSearcher {
-			x.Header().Set("Content-Type", "application/json")
-			x.WriteHeader(http.StatusOK)
+		if !options.AllowSearch {
+			x.WriteHeader(http.StatusForbidden)
 			return
 		}
-		x.WriteHeader(http.StatusNotImplemented)
+		x.Header().Set("Content-Type", "application/json")
+		x.WriteHeader(http.StatusOK)
 		return
 	}
 
 	file, err := filesystem.Open(p)
 	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) {
-			x.WriteHeader(http.StatusNotFound)
-			return
-		}
-		if errors.Is(err, fs.ErrPermission) {
-			x.WriteHeader(http.StatusForbidden)
-			return
-		}
-		x.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	defer file.Close()
-
-	stat, err := file.Stat()
-	if err != nil {
-		x.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-
-	if stat.IsDir() {
-		if options.MaxDepth <= 0 {
-			x.WriteHeader(http.StatusForbidden)
-			return
-		}
-		depth := parseDepth(x.Request, options)
-		serveDirListHead(x, filesystem, p, stat, depth)
-		return
-	}
-
-	if rs, ok := file.(io.ReadSeeker); ok {
-		etag := getETag(p, stat, options.ETagCache)
-
-		if checkNotModified(x.Request, etag, stat.ModTime()) {
-			x.WriteHeader(http.StatusNotModified)
-			return
-		}
-
-		setCacheHeaders(x.ResponseWriter(), etag, stat.ModTime(), options.CacheControl)
-		http.ServeContent(x.ResponseWriter(), x.Request, stat.Name(), stat.ModTime(), rs)
-		return
-	}
-	x.WriteHeader(http.StatusInternalServerError)
-}
-
-// handleHeadWithDefault serves HEAD requests with SPA fallback.
-func handleHeadWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions, df *defaultFileInfo) {
-	p, err := resolvePath(x, "open", options.PathFunc)
-	if err != nil {
-		x.WriteHeader(http.StatusBadRequest)
-		return
-	}
-
-	if _, _, _, _, ok := parseSearchParams(x.Request); ok {
-		if _, isSearcher := filesystem.(Searcher); isSearcher {
-			x.Header().Set("Content-Type", "application/json")
-			x.WriteHeader(http.StatusOK)
-			return
-		}
-		x.WriteHeader(http.StatusNotImplemented)
-		return
-	}
-
-	file, err := filesystem.Open(p)
-	if err != nil {
-		if errors.Is(err, fs.ErrNotExist) && !skipFallback(x, df) {
-			serveDefaultFileHead(x, filesystem, df, options)
+		if errors.Is(err, fs.ErrNotExist) && options.spa != nil && !skipFallback(x) {
+			serveSpaHead(x, options.spa, options)
 			return
 		}
 		if errors.Is(err, fs.ErrNotExist) {
@@ -522,33 +450,29 @@ func handleHeadWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions,
 	}
 
 	if stat.IsDir() {
-		if !skipFallback(x, df) {
-			serveDefaultFileHead(x, filesystem, df, options)
+		if options.spa != nil && !skipFallback(x) {
+			serveSpaHead(x, options.spa, options)
 			return
 		}
 		if options.MaxDepth <= 0 {
 			x.WriteHeader(http.StatusForbidden)
 			return
 		}
-		depth := parseDepth(x.Request, options)
-		serveDirListHead(x, filesystem, p, stat, depth)
+		serveDirListHead(x, filesystem, p, stat, parseDepth(x.Request, options))
 		return
 	}
 
-	// Browser (no X-No-Fallback, Accept: text/html) → serve SPA
-	if !skipFallback(x, df) {
-		serveDefaultFileHead(x, filesystem, df, options)
+	if options.spa != nil && !skipFallback(x) {
+		serveSpaHead(x, options.spa, options)
 		return
 	}
 
 	if rs, ok := file.(io.ReadSeeker); ok {
 		etag := getETag(p, stat, options.ETagCache)
-
 		if checkNotModified(x.Request, etag, stat.ModTime()) {
 			x.WriteHeader(http.StatusNotModified)
 			return
 		}
-
 		setCacheHeaders(x.ResponseWriter(), etag, stat.ModTime(), options.CacheControl)
 		http.ServeContent(x.ResponseWriter(), x.Request, stat.Name(), stat.ModTime(), rs)
 		return
@@ -557,18 +481,16 @@ func handleHeadWithDefault(x *vigo.X, filesystem fs.FS, options *HandlerOptions,
 }
 
 // =============================================================================
-// Internal: Write handlers
+// Write handlers
 // =============================================================================
 
-// handlePut creates or overwrites a file with the request body.
-func handlePut(x *vigo.X, filesystem FS, options *RWOptions) {
+func handlePut(x *vigo.X, filesystem FS, options *HandlerOptions) {
 	p, err := resolvePath(x, "write", options.PathFunc)
 	if err != nil {
 		x.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// Check if path is an existing directory
 	if statFS, ok := filesystem.(fs.StatFS); ok {
 		if info, err := statFS.Stat(p); err == nil && info.IsDir() {
 			x.WriteHeader(http.StatusConflict)
@@ -576,7 +498,6 @@ func handlePut(x *vigo.X, filesystem FS, options *RWOptions) {
 		}
 	}
 
-	// Read request body
 	var body []byte
 	if options.MaxFileSize > 0 {
 		x.Request.Body = http.MaxBytesReader(x.ResponseWriter(), x.Request.Body, options.MaxFileSize)
@@ -604,7 +525,6 @@ func handlePut(x *vigo.X, filesystem FS, options *RWOptions) {
 	x.WriteHeader(http.StatusCreated)
 }
 
-// handleDelete removes a file or directory.
 func handleDelete(x *vigo.X, filesystem FS, pf PathFunc) {
 	p, err := resolvePath(x, "remove", pf)
 	if err != nil {
@@ -628,7 +548,6 @@ func handleDelete(x *vigo.X, filesystem FS, pf PathFunc) {
 	x.WriteHeader(http.StatusNoContent)
 }
 
-// handleMkcol creates a directory.
 func handleMkcol(x *vigo.X, filesystem FS, pf PathFunc) {
 	p, err := resolvePath(x, "mkdir", pf)
 	if err != nil {
@@ -636,7 +555,6 @@ func handleMkcol(x *vigo.X, filesystem FS, pf PathFunc) {
 		return
 	}
 
-	// Check if already exists
 	if statFS, ok := filesystem.(fs.StatFS); ok {
 		if _, err := statFS.Stat(p); err == nil {
 			x.WriteHeader(http.StatusConflict)
@@ -656,13 +574,11 @@ func handleMkcol(x *vigo.X, filesystem FS, pf PathFunc) {
 	x.WriteHeader(http.StatusCreated)
 }
 
-// patchRequest is the JSON body for PATCH requests.
 type patchRequest struct {
 	Action string `json:"action"`
 	To     string `json:"to"`
 }
 
-// handlePatch handles rename/move requests.
 func handlePatch(x *vigo.X, filesystem FS, pf PathFunc) {
 	p, err := resolvePath(x, "rename", pf)
 	if err != nil {
@@ -680,19 +596,16 @@ func handlePatch(x *vigo.X, filesystem FS, pf PathFunc) {
 		x.WriteHeader(http.StatusBadRequest)
 		return
 	}
-
 	if req.To == "" {
 		x.WriteHeader(http.StatusBadRequest)
 		return
 	}
 
-	// Normalize target path
 	to := req.To
 	if len(to) > 0 && to[0] == '/' {
 		to = to[1:]
 	}
 
-	// Check source exists
 	if statFS, ok := filesystem.(fs.StatFS); ok {
 		if _, err := statFS.Stat(p); err != nil {
 			if errors.Is(err, fs.ErrNotExist) {
@@ -700,7 +613,6 @@ func handlePatch(x *vigo.X, filesystem FS, pf PathFunc) {
 				return
 			}
 		}
-		// Check target doesn't exist
 		if _, err := statFS.Stat(to); err == nil {
 			x.WriteHeader(http.StatusConflict)
 			return
@@ -723,8 +635,7 @@ func handlePatch(x *vigo.X, filesystem FS, pf PathFunc) {
 	x.WriteHeader(http.StatusOK)
 }
 
-// handleOptions responds with the Allow header based on enabled operations.
-func handleOptions(x *vigo.X, options *RWOptions) {
+func handleOptions(x *vigo.X, options *HandlerOptions) {
 	methods := "GET, HEAD, OPTIONS"
 	if options.AllowPut {
 		methods += ", PUT"
@@ -746,7 +657,6 @@ func handleOptions(x *vigo.X, options *RWOptions) {
 // Directory listing helpers
 // =============================================================================
 
-// isGitRepo checks if the directory at p contains a .git subdirectory.
 func isGitRepo(filesystem fs.FS, p string) bool {
 	if statFS, ok := filesystem.(fs.StatFS); ok {
 		info, err := statFS.Stat(path.Join(p, ".git"))
@@ -761,7 +671,6 @@ func isGitRepo(filesystem fs.FS, p string) bool {
 	return err == nil && info.IsDir()
 }
 
-// parseDepth extracts depth from the request query string.
 func parseDepth(r *http.Request, options *HandlerOptions) int {
 	if options.MaxDepth <= 0 {
 		return 0
@@ -779,7 +688,6 @@ func parseDepth(r *http.Request, options *HandlerOptions) int {
 	return depth
 }
 
-// buildItemTree builds an ItemEntry tree for the directory at p, recursing up to depth levels.
 func buildItemTree(filesystem fs.FS, p string, stat fs.FileInfo, depth int) (*ItemEntry, error) {
 	entries, err := readDir(filesystem, p)
 	if err != nil {
@@ -842,7 +750,6 @@ func buildItemTree(filesystem fs.FS, p string, stat fs.FileInfo, depth int) (*It
 	}, nil
 }
 
-// serveDirList writes a JSON directory listing to the response.
 func serveDirList(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo, depth int) {
 	entry, err := buildItemTree(filesystem, p, stat, depth)
 	if err != nil {
@@ -852,7 +759,6 @@ func serveDirList(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo, depth
 	x.JSON(entry)
 }
 
-// serveDirListHead sets headers for a directory listing without writing the body.
 func serveDirListHead(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo, depth int) {
 	entry, err := buildItemTree(filesystem, p, stat, depth)
 	if err != nil {
@@ -866,147 +772,74 @@ func serveDirListHead(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo, d
 }
 
 // =============================================================================
-// Default file helpers
-// =============================================================================
-
-// resolveDefaultFileInfo reads the default file metadata at construction time.
-func resolveDefaultFileInfo(filesystem fs.FS, defaultPath string, options *HandlerOptions) *defaultFileInfo {
-	df, err := filesystem.Open(defaultPath)
-	if err != nil {
-		logv.Warn().Msgf("default file %s not found: %v", defaultPath, err)
-		return nil
-	}
-	defer df.Close()
-
-	stat, err := df.Stat()
-	if err != nil || stat.IsDir() {
-		logv.Warn().Msgf("default file %s is a directory or cannot be stat'ed", defaultPath)
-		return nil
-	}
-
-	return &defaultFileInfo{
-		path:    defaultPath,
-		name:    stat.Name(),
-		modTime: stat.ModTime(),
-		etag:    getETag(defaultPath, stat, options.ETagCache),
-	}
-}
-
-// serveDefaultFile serves the default file with caching headers.
-func serveDefaultFile(x *vigo.X, filesystem fs.FS, df *defaultFileInfo, options *HandlerOptions) {
-	if checkNotModified(x.Request, df.etag, df.modTime) {
-		x.WriteHeader(http.StatusNotModified)
-		return
-	}
-
-	file, err := filesystem.Open(df.path)
-	if err != nil {
-		x.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	defer file.Close()
-
-	if rs, ok := file.(io.ReadSeeker); ok {
-		setCacheHeaders(x.ResponseWriter(), df.etag, df.modTime, options.CacheControl)
-		http.ServeContent(x.ResponseWriter(), x.Request, df.name, df.modTime, rs)
-		return
-	}
-	x.WriteHeader(http.StatusInternalServerError)
-}
-
-// serveDefaultFileHead handles HEAD requests for the default file.
-func serveDefaultFileHead(x *vigo.X, filesystem fs.FS, df *defaultFileInfo, options *HandlerOptions) {
-	if checkNotModified(x.Request, df.etag, df.modTime) {
-		x.WriteHeader(http.StatusNotModified)
-		return
-	}
-
-	file, err := filesystem.Open(df.path)
-	if err != nil {
-		x.WriteHeader(http.StatusInternalServerError)
-		return
-	}
-	defer file.Close()
-
-	if rs, ok := file.(io.ReadSeeker); ok {
-		setCacheHeaders(x.ResponseWriter(), df.etag, df.modTime, options.CacheControl)
-		http.ServeContent(x.ResponseWriter(), x.Request, df.name, df.modTime, rs)
-		return
-	}
-	x.WriteHeader(http.StatusInternalServerError)
-}
-
-// =============================================================================
 // Public API
 // =============================================================================
 
 // NewHandler returns a vigo handler that serves static files from the FS.
-// It expects a path parameter named "path" in the route (e.g., "/static/{path:*}").
-// If the path resolves to a directory, it returns a JSON list of the directory contents.
 //
-// Search: when the ?glob= query parameter is present, the handler attempts a search
-// via the Searcher interface instead of serving a file. If the underlying FS does not
-// implement Searcher, 501 Not Implemented is returned.
-//
-//	?glob=**/*.go                    — file-name glob search
-//	?glob=**/*.go&pattern=func       — content grep search
-//	?glob=**/*.go&limit=20           — limit results (default 100)
-//	?glob=&pattern=hello&ignore_case=true — case-insensitive grep
-//
-// HTTP Cache Support:
-//   - ETag: Generated from file size and modification time (or from ETagCache if provided)
-//   - Last-Modified: File modification time
-//   - 304 Not Modified: Returned when If-None-Match or If-Modified-Since match
-//   - Cache-Control: Configurable via HandlerOptions
-func NewHandler(fsLoader *fs.FS, opts ...*HandlerOptions) func(*vigo.X) {
-	options := mergeOptions(opts)
-	return func(x *vigo.X) {
-		handleGet(x, *fsLoader, options)
+//	handler := ufs.NewHandler(&fs,
+//	    ufs.WithSpa("index.html", nil),
+//	    ufs.WithMaxDepth(3),
+//	    ufs.WithAllowSearch(true),
+//	)
+func NewHandler(fsLoader *fs.FS, opts ...HttpOption) func(*vigo.X) {
+	options := &HandlerOptions{
+		CacheControl: "public, max-age=0, must-revalidate",
 	}
-}
-
-// NewHandlerWithDefault returns a vigo handler with a default file fallback.
-// If the requested path is not found or is a directory, the default file is served.
-// The default file is resolved lazily on the first request.
-//
-// See NewHandler for search and cache behavior.
-func NewHandlerWithDefault(filesystem *fs.FS, defaultPath string, opts ...*HandlerOptions) func(*vigo.X) {
-	options := mergeOptions(opts)
-	var df *defaultFileInfo
-	var dfOnce sync.Once
+	for _, opt := range opts {
+		opt(options)
+	}
 
 	return func(x *vigo.X) {
-		dfOnce.Do(func() {
-			df = resolveDefaultFileInfo(*filesystem, defaultPath, options)
+		filesystem := *fsLoader
+		options.spaOnce.Do(func() {
+			if options.spaCfg != nil {
+				if spa, err := resolveSpa(filesystem, options.spaCfg); err != nil {
+					logv.Warn().Msgf("ufs: SPA %q resolve failed: %v", options.spaCfg.name, err)
+				} else {
+					options.spa = spa
+				}
+			}
 		})
-		handleGetWithDefault(x, *filesystem, options, df)
+		handleGet(x, filesystem, options)
 	}
 }
 
 // NewRWHandler returns a vigo handler with full read/write support for ufs.FS.
-// It expects a path parameter named "path" in the route (e.g., "/fs/{path:*}").
-// Mount with router.Any() to capture all HTTP methods.
+// All write operations are enabled by default. Mount with router.Any().
 //
-// Supported methods:
-//   - GET: Read file, list directory, or search (when ?glob= is present)
-//   - HEAD: Same as GET but returns headers only
-//   - PUT: Create/overwrite file (request body = file content)
-//   - DELETE: Remove file or directory
-//   - POST: Create directory
-//   - PATCH: Rename/move (JSON body: {"action": "rename", "to": "/new/path"})
-//   - OPTIONS: Returns Allow header
-//
-// Write operations can be individually disabled via RWOptions.
-func NewRWHandler(fsLoader *FS, opts ...*RWOptions) func(*vigo.X) {
-	options := mergeRWOptions(opts)
+//	handler := ufs.NewRWHandler(&fs,
+//	    ufs.WithPathFunc(myPathFunc),
+//	    ufs.WithMaxFileSize(10 << 20),
+//	)
+func NewRWHandler(fsLoader *FS, opts ...HttpOption) func(*vigo.X) {
+	options := &HandlerOptions{
+		CacheControl: "public, max-age=0, must-revalidate",
+		AllowPut:     true,
+		AllowDelete:  true,
+		AllowMkdir:   true,
+		AllowRename:  true,
+	}
+	for _, opt := range opts {
+		opt(options)
+	}
 
 	return func(x *vigo.X) {
 		filesystem := *fsLoader
+		options.spaOnce.Do(func() {
+			if options.spaCfg != nil {
+				if spa, err := resolveSpa(filesystem, options.spaCfg); err != nil {
+					logv.Warn().Msgf("ufs: SPA %q resolve failed: %v", options.spaCfg.name, err)
+				} else {
+					options.spa = spa
+				}
+			}
+		})
 		switch x.Request.Method {
 		case http.MethodGet:
-			handleGet(x, filesystem, &options.HandlerOptions)
+			handleGet(x, filesystem, options)
 		case http.MethodHead:
-			handleHead(x, filesystem, &options.HandlerOptions)
+			handleHead(x, filesystem, options)
 		case http.MethodPut:
 			if !options.AllowPut {
 				x.WriteHeader(http.StatusMethodNotAllowed)
@@ -1039,69 +872,19 @@ func NewRWHandler(fsLoader *FS, opts ...*RWOptions) func(*vigo.X) {
 	}
 }
 
-// NewRWHandlerWithDefault returns a vigo handler with full read/write support
-// and SPA-style fallback to a default file for GET/HEAD requests.
-// Write operations are not affected by the default file fallback.
-// The default file is resolved lazily on the first request.
-func NewRWHandlerWithDefault(filesystem *FS, defaultPath string, opts ...*RWOptions) func(*vigo.X) {
-	options := mergeRWOptions(opts)
-	var df *defaultFileInfo
-	var dfOnce sync.Once
+// =============================================================================
+// Internal helpers
+// =============================================================================
 
-	return func(x *vigo.X) {
-		dfOnce.Do(func() {
-			df = resolveDefaultFileInfo(*filesystem, defaultPath, &options.HandlerOptions)
-		})
-		fs := *filesystem
-		switch x.Request.Method {
-		case http.MethodGet:
-			handleGetWithDefault(x, fs, &options.HandlerOptions, df)
-		case http.MethodHead:
-			handleHeadWithDefault(x, fs, &options.HandlerOptions, df)
-		case http.MethodPut:
-			if !options.AllowPut {
-				x.WriteHeader(http.StatusMethodNotAllowed)
-				return
-			}
-			handlePut(x, fs, options)
-		case http.MethodDelete:
-			if !options.AllowDelete {
-				x.WriteHeader(http.StatusMethodNotAllowed)
-				return
-			}
-			handleDelete(x, fs, options.PathFunc)
-		case http.MethodPost:
-			if !options.AllowMkdir {
-				x.WriteHeader(http.StatusMethodNotAllowed)
-				return
-			}
-			handleMkcol(x, fs, options.PathFunc)
-		case http.MethodPatch:
-			if !options.AllowRename {
-				x.WriteHeader(http.StatusMethodNotAllowed)
-				return
-			}
-			handlePatch(x, fs, options.PathFunc)
-		case http.MethodOptions:
-			handleOptions(x, options)
-		default:
-			x.WriteHeader(http.StatusMethodNotAllowed)
-		}
-	}
-}
-
-// readDir is a helper to read directory entries from any fs.FS.
 func readDir(filesystem fs.FS, name string) ([]fs.DirEntry, error) {
 	if rdfs, ok := filesystem.(fs.ReadDirFS); ok {
 		return rdfs.ReadDir(name)
 	}
-	// Fallback
 	file, err := filesystem.Open(name)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
-
 	if rdf, ok := file.(fs.ReadDirFile); ok {
 		return rdf.ReadDir(-1)
 	}

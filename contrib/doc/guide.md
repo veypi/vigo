@@ -2,7 +2,7 @@
 
 ## 页面操作
 
-访问 `{{PREFIX}}/` 进入文档浏览器，文件列表居中显示。
+访问 `{{.PREFIX}}/` 进入文档浏览器，文件列表居中显示。
 
 - **浏览文件**: 点击文件名查看内容，文本文件显示源码，图片直接预览，二进制文件提示下载
 - **下载文件**: 文件模式工具栏右侧有下载按钮，直接下载原始文件
@@ -22,7 +22,7 @@ API 接口默认可通过两种方式访问：
 ### 目录列表
 
 ```
-GET {{PREFIX}}/?depth=5
+GET {{.PREFIX}}/?depth=5
 ```
 
 | 参数 | 说明 |
@@ -34,7 +34,7 @@ GET {{PREFIX}}/?depth=5
 ### 文件内容
 
 ```
-GET {{PREFIX}}/{path}.md
+GET {{.PREFIX}}/{path}.md
 ```
 
 返回原始 Markdown 文本（`Content-Type: text/plain`）。
@@ -42,7 +42,7 @@ GET {{PREFIX}}/{path}.md
 ### 文件搜索
 
 ```
-GET {{PREFIX}}/?glob=**/*.md&pattern={regex}&limit=30&ignore_case=true
+GET {{.PREFIX}}/?glob=**/*.md&pattern={regex}&limit=30&ignore_case=true
 ```
 
 | 参数 | 说明 |
@@ -58,11 +58,11 @@ GET {{PREFIX}}/?glob=**/*.md&pattern={regex}&limit=30&ignore_case=true
 
 ```bash
 # 搜索包含 "vigo" 的文档
-curl -H 'X-No-Fallback: true' '{{PREFIX}}/?glob=**/*.md&pattern=vigo'
+curl -H 'X-No-Fallback: true' '{{.PREFIX}}/?glob=**/*.md&pattern=vigo'
 
 # 搜索文件名包含 "api" 的文档
-curl -H 'X-No-Fallback: true' '{{PREFIX}}/?glob=**/*api*.md'
+curl -H 'X-No-Fallback: true' '{{.PREFIX}}/?glob=**/*api*.md'
 
 # 忽略大小写搜索
-curl -H 'X-No-Fallback: true' '{{PREFIX}}/?glob=**/*.md&pattern=Error&ignore_case=true'
+curl -H 'X-No-Fallback: true' '{{.PREFIX}}/?glob=**/*.md&pattern=Error&ignore_case=true'
 ```

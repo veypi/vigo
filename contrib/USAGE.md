@@ -227,13 +227,18 @@ multiFS := ufs.NewMultiFS(
 
 // HTTP Handler (支持 ETag/Last-Modified/304 缓存)
 handler := ufs.NewHandler(multiFS)
-handlerWithDefault := ufs.NewHandlerWithDefault(multiFS, "index.html")
 
-// 自定义缓存控制
-opts := &ufs.HandlerOptions{
-    CacheControl: "public, max-age=3600",
-}
-handler := ufs.NewHandler(embedFS, opts)
+// SPA 回退 (浏览器请求非文件路径时自动返回 index.html)
+handler := ufs.NewHandler(embedFS,
+    ufs.WithSpa("index.html", nil), // content=nil 表示从 FS 读取文件
+)
+
+// 自定义配置
+handler := ufs.NewHandler(embedFS,
+    ufs.WithCacheControl("public, max-age=3600"),
+    ufs.WithMaxDepth(3),
+    ufs.WithAllowSearch(true),
+)
 ```
 
 ## doc - 文档文件系统

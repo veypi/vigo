@@ -10,10 +10,11 @@
 package doc
 
 import (
+	"bytes"
 	_ "embed"
 	"io/fs"
 	"strconv"
-	"strings"
+	"text/template"
 
 	"github.com/veypi/vigo"
 	"github.com/veypi/vigo/contrib/ufs"
@@ -42,14 +43,12 @@ type DocOptions struct {
 
 // New mounts a documentation browser on the given router.
 //
-// docFS is an fs.FS containing markdown (.md) files. Non-.md files are
-// filtered out automatically. prefix scopes docFS to a subdirectory
-// (e.g., "docs" for //go:embed docs/*.md).
+// docFS is an fs.FS containing documentation files. prefix scopes docFS
+// to a subdirectory (e.g., "docs" for //go:embed docs/*.md).
 //
-// The handler serves an index.html SPA for browser navigation and uses
+// The handler serves an embedded SPA for browser navigation and uses
 // ufs for directory listing, file content, and search.
 func New(router vigo.Router, docFS fs.FS, prefix string, opts ...*DocOptions) {
-	// Apply prefix via fs.Sub
 	if prefix != "" && prefix != "." {
 		if sub, err := fs.Sub(docFS, prefix); err == nil {
 			docFS = sub
@@ -58,7 +57,6 @@ func New(router vigo.Router, docFS fs.FS, prefix string, opts ...*DocOptions) {
 		}
 	}
 
-	// Merge options
 	maxDepth := 5
 	cacheControl := "public, max-age=0"
 	if len(opts) > 0 && opts[0] != nil {
@@ -70,49 +68,44 @@ func New(router vigo.Router, docFS fs.FS, prefix string, opts ...*DocOptions) {
 		}
 	}
 
-	// Inject router prefix and max depth into index.html
-	html := strings.ReplaceAll(indexHTML, "{{PREFIX}}", router.String())
-	html = strings.ReplaceAll(html, "{{DEPTH}}", strconv.Itoa(maxDepth))
-
-	// Inject router prefix into guide
-	guide := strings.ReplaceAll(guideMD, "{{PREFIX}}", router.String())
-
-	// Create filtered FS that only exposes .md files + index.html
-	dfs := newDocFS(docFS, html)
-	var fsys fs.FS = dfs
-
-	handler := ufs.NewHandlerWithDefault(&fsys, "index.html", &ufs.HandlerOptions{
-		MaxDepth:     maxDepth,
-		CacheControl: cacheControl,
-		AllowSearch:  true,
-	})
-
-	router.Get("/", "文档首页", func(x *vigo.X) {
-		// API requests (X-No-Fallback, depth, glob) go through the ufs handler
-		r := x.Request
-		if r.Header.Get("X-No-Fallback") != "" ||
-			r.URL.Query().Has("depth") ||
-			r.URL.Query().Has("glob") {
-			handler(x)
-			return
+	vars := func() map[string]any {
+		return map[string]any{
+			"PREFIX": router.String(),
+			"DEPTH":  strconv.Itoa(maxDepth),
 		}
-		x.Header().Set("Content-Type", "text/html; charset=utf-8")
-		x.WriteHeader(200)
-		x.WriteString(html + "\n")
-	})
+	}
+
+	guide := execTemplate("guide.md", guideMD, vars())
+
+	handler := ufs.NewHandler(&docFS,
+		ufs.WithSpa("index.html", []byte(indexHTML), vars),
+		ufs.WithMaxDepth(maxDepth),
+		ufs.WithCacheControl(cacheControl),
+		ufs.WithAllowSearch(true),
+	)
 
 	router.Get("/.guide", "使用指南", func(x *vigo.X) {
 		x.Header().Set("Content-Type", "text/markdown; charset=utf-8")
 		x.WriteHeader(200)
 		x.WriteString(guide + "\n")
 	})
-
 	router.Get("/vhtml.html", "VHTML组件文档", func(x *vigo.X) {
 		x.Header().Set("Content-Type", "text/html; charset=utf-8")
 		x.WriteHeader(200)
 		x.WriteString(vhtmlHTML + "\n")
 	})
-
 	router.Get("/{path:*}", "文档浏览", handler)
 	router.Head("/{path:*}", "文档信息", handler)
+}
+
+func execTemplate(name, text string, data any) string {
+	tmpl, err := template.New(name).Parse(text)
+	if err != nil {
+		return text
+	}
+	var buf bytes.Buffer
+	if err := tmpl.Execute(&buf, data); err != nil {
+		return text
+	}
+	return buf.String()
 }
