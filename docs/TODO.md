@@ -48,10 +48,10 @@
 ## P0 主体稳定性
 
 - 收敛 handler 标准化实现，逐步移除或隔离高风险 `unsafe` 路径。
-- 给 `server` 增加合理的默认超时和 `MaxHeaderBytes`。
-- 增加优雅关闭能力，包括 HTTP server 和 event manager 的 shutdown。
+- ✅ 给 `server` 增加合理的默认超时和 `MaxHeaderBytes`。(v0.7.0: 默认 ShutdownTimeout 调整为 1s)
+- ✅ 增加优雅关闭能力，包括 HTTP server 和 event manager 的 shutdown。(v0.7.0: App.Exit 生命周期钩子 + functional options)
 - 统一 body size limit，打通 `Config.PostMaxMemory` 与实际解析逻辑。
-- 明确可信代理策略，修正 `GetRemoteIP` 的默认行为。
+- ✅ 明确可信代理策略，修正 `GetRemoteIP` 的默认行为。(v0.7.0: Config.TrustedProxies / WithTrustedProxies)
 
 ## P1 主体一致性
 
@@ -65,7 +65,7 @@
 
 - 补充核心模块测试覆盖。
 - 给 `contrib/cache`、`contrib/limiter` 等模块增加生命周期控制。
-- 统一日志上下文字段，增加 request id、耗时、路由摘要等基础观测信息。
+- ✅ 统一日志上下文字段，增加 request id、耗时、路由摘要等基础观测信息。(v0.7.0: x.RequestID() + 按状态码区分日志级别)
 - 为 doc system 增加更清晰的开发文档和示例。
 
 ## 4. 中期规划
