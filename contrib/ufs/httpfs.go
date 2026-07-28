@@ -296,12 +296,12 @@ func resolveSpaLazy(spa *spaFile) {
 		vars := spa.attrsFn()
 		tmpl, err := template.New(spa.name).Parse(string(spa.content))
 		if err != nil {
-			logv.Warn().Msgf("ufs: SPA template parse %q: %v", spa.name, err)
+			logv.Error().Msgf("ufs: SPA template parse %q: %v", spa.name, err)
 			return
 		}
 		var buf bytes.Buffer
 		if err := tmpl.Execute(&buf, vars); err != nil {
-			logv.Warn().Msgf("ufs: SPA template execute %q: %v", spa.name, err)
+			logv.Error().Msgf("ufs: SPA template execute %q: %v", spa.name, err)
 			return
 		}
 		spa.content = buf.Bytes()
@@ -382,15 +382,14 @@ func handleGet(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 			return
 		}
 		if options.MaxDepth <= 0 {
-			x.WriteHeader(http.StatusForbidden)
+			if options.spa != nil {
+				serveSpa(x, options.spa, options)
+			} else {
+				x.WriteHeader(http.StatusForbidden)
+			}
 			return
 		}
 		serveDirList(x, filesystem, p, stat, parseDepth(x.Request, options))
-		return
-	}
-
-	if options.spa != nil && !skipFallback(x) {
-		serveSpa(x, options.spa, options)
 		return
 	}
 
@@ -455,15 +454,14 @@ func handleHead(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 			return
 		}
 		if options.MaxDepth <= 0 {
-			x.WriteHeader(http.StatusForbidden)
+			if options.spa != nil {
+				serveSpaHead(x, options.spa, options)
+			} else {
+				x.WriteHeader(http.StatusForbidden)
+			}
 			return
 		}
 		serveDirListHead(x, filesystem, p, stat, parseDepth(x.Request, options))
-		return
-	}
-
-	if options.spa != nil && !skipFallback(x) {
-		serveSpaHead(x, options.spa, options)
 		return
 	}
 
