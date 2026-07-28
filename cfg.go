@@ -35,7 +35,6 @@ type Config struct {
 	IdleTimeout       time.Duration `json:"idle_timeout,omitempty"`
 	ShutdownTimeout   time.Duration `json:"shutdown_timeout,omitempty"`
 	MaxHeaderBytes    int           `json:"max_header_bytes,omitempty"`
-	TrustedProxies    []string      `json:"trusted_proxies,omitempty"`
 	RequestIDHeader   string        `json:"request_id_header,omitempty"`
 	DisableReqLog     bool          `json:"disable_req_log,omitempty"`
 }
@@ -160,12 +159,6 @@ func WithShutdownTimeout(timeout time.Duration) func(*Config) {
 func WithMaxHeaderBytes(size int) func(*Config) {
 	return func(c *Config) {
 		c.MaxHeaderBytes = size
-	}
-}
-
-func WithTrustedProxies(proxies ...string) func(*Config) {
-	return func(c *Config) {
-		c.TrustedProxies = append(c.TrustedProxies[:0], proxies...)
 	}
 }
 

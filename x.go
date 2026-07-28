@@ -55,6 +55,7 @@ type X struct {
 	PipeValue   any
 	wroteHeader bool
 	statusCode  int
+	maxMemory   int64
 }
 
 var _ http.ResponseWriter = &X{}
@@ -171,16 +172,15 @@ var xPool = sync.Pool{
 	},
 }
 
-type contextKey string
-
 const (
-	configContextKey    contextKey = "vigo_config"
-	requestIDContextKey contextKey = "vigo_request_id"
+	requestIDContextKey = "vigo_request_id"
 )
 
 func acquire() *X {
 	v := xPool.Get()
-	return v.(*X)
+	x := v.(*X)
+	x.maxMemory = 32 << 20
+	return x
 }
 
 func release(x *X) {
@@ -213,16 +213,6 @@ func (x *X) StatusCode() int {
 		return http.StatusOK
 	}
 	return x.statusCode
-}
-
-func (x *X) Config() *Config {
-	if x == nil || x.Request == nil {
-		return nil
-	}
-	if cfg, ok := x.Request.Context().Value(configContextKey).(*Config); ok {
-		return cfg
-	}
-	return nil
 }
 
 func (x *X) RequestID() string {
