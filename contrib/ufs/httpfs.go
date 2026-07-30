@@ -72,6 +72,23 @@ func resolvePath(x *vigo.X, op string, pf PathFunc) (string, error) {
 	return validatePath(p, op)
 }
 
+// writePathError writes a JSON error response for path validation failures.
+func writePathError(x *vigo.X, err error) {
+	code := 400
+	msg := err.Error()
+	if e, ok := err.(*vigo.Error); ok {
+		code = e.Code
+		if code > 999 {
+			code, _ = strconv.Atoi(strconv.Itoa(code)[:3])
+		}
+		msg = e.Message
+	}
+	x.Header().Set("Content-Type", "application/json; charset=utf-8")
+	x.WriteHeader(code)
+	b, _ := json.Marshal(map[string]any{"code": code, "message": msg})
+	x.Write(b)
+}
+
 // HandlerOptions configures the HTTP handler behavior for both read-only and read/write handlers.
 // Write-specific fields (AllowPut, etc.) are ignored by NewHandler.
 type HandlerOptions struct {
@@ -276,7 +293,7 @@ func trySearch(x *vigo.X, filesystem fs.FS, searchPath string, options *HandlerO
 	}
 	results, err := Search(filesystem, searchPath, glob, pattern, limit, ignoreCase)
 	if err != nil {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return true
 	}
 	x.JSON(results)
@@ -343,7 +360,7 @@ func serveSpaHead(x *vigo.X, spa *spaFile, options *HandlerOptions) {
 func handleGet(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 	p, err := resolvePath(x, "open", options.PathFunc)
 	if err != nil {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return
 	}
 
@@ -409,7 +426,7 @@ func handleGet(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 func handleHead(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 	p, err := resolvePath(x, "open", options.PathFunc)
 	if err != nil {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return
 	}
 
@@ -485,7 +502,7 @@ func handleHead(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 func handlePut(x *vigo.X, filesystem FS, options *HandlerOptions) {
 	p, err := resolvePath(x, "write", options.PathFunc)
 	if err != nil {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return
 	}
 
@@ -507,7 +524,7 @@ func handlePut(x *vigo.X, filesystem FS, options *HandlerOptions) {
 			x.WriteHeader(http.StatusRequestEntityTooLarge)
 			return
 		}
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return
 	}
 
@@ -526,7 +543,7 @@ func handlePut(x *vigo.X, filesystem FS, options *HandlerOptions) {
 func handleDelete(x *vigo.X, filesystem FS, pf PathFunc) {
 	p, err := resolvePath(x, "remove", pf)
 	if err != nil {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return
 	}
 
@@ -549,7 +566,7 @@ func handleDelete(x *vigo.X, filesystem FS, pf PathFunc) {
 func handleMkcol(x *vigo.X, filesystem FS, pf PathFunc) {
 	p, err := resolvePath(x, "mkdir", pf)
 	if err != nil {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return
 	}
 
@@ -580,22 +597,22 @@ type patchRequest struct {
 func handlePatch(x *vigo.X, filesystem FS, pf PathFunc) {
 	p, err := resolvePath(x, "rename", pf)
 	if err != nil {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return
 	}
 
 	var req patchRequest
 	if err := json.NewDecoder(x.Request.Body).Decode(&req); err != nil {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return
 	}
 
 	if req.Action != "rename" {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, fmt.Errorf("rename: action required"))
 		return
 	}
 	if req.To == "" {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, fmt.Errorf("rename: to is required"))
 		return
 	}
 
