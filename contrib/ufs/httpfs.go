@@ -57,6 +57,14 @@ type spaConfig struct {
 // Default: returns x.PathParams.Get("path").
 type PathFunc func(*vigo.X) (string, error)
 
+// RenameToFunc validates and normalizes the rename destination (the "to" field
+// of a PATCH rename request). The input is the raw client value, expected to be
+// UFS-root-relative (no HTTP mount prefix). validatePath is applied to the
+// returned value — implementations don't need to validate the format.
+// Return an error to reject the rename (e.g., 403 for unauthorized destinations).
+// Default: the raw value passed through validatePath only.
+type RenameToFunc func(*vigo.X, string) (string, error)
+
 func defaultPathFunc(x *vigo.X) (string, error) {
 	return x.PathParams.Get("path"), nil
 }
@@ -95,6 +103,7 @@ type HandlerOptions struct {
 	CacheControl string
 	ETagCache    map[string]string
 	PathFunc     PathFunc
+	RenameToFunc RenameToFunc
 	MaxDepth     int
 	AllowSearch  bool
 
@@ -153,6 +162,10 @@ func WithAllowSearch(v bool) HttpOption {
 
 func WithPathFunc(pf PathFunc) HttpOption {
 	return func(o *HandlerOptions) { o.PathFunc = pf }
+}
+
+func WithRenameToFunc(fn RenameToFunc) HttpOption {
+	return func(o *HandlerOptions) { o.RenameToFunc = fn }
 }
 
 func WithETagCache(m map[string]string) HttpOption {
@@ -488,6 +501,10 @@ func handleHead(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 			x.WriteHeader(http.StatusNotModified)
 			return
 		}
+		// Explicit non-directory marker: lets HEAD clients distinguish a regular
+		// file from a directory without relying on Content-Type heuristics
+		// (e.g. a .json file also yields application/json).
+		x.Header().Set("X-UFS-Dir", "false")
 		setCacheHeaders(x.ResponseWriter(), etag, stat.ModTime(), options.CacheControl)
 		http.ServeContent(x.ResponseWriter(), x.Request, stat.Name(), stat.ModTime(), rs)
 		return
@@ -594,8 +611,8 @@ type patchRequest struct {
 	To     string `json:"to"`
 }
 
-func handlePatch(x *vigo.X, filesystem FS, pf PathFunc) {
-	p, err := resolvePath(x, "rename", pf)
+func handlePatch(x *vigo.X, filesystem FS, options *HandlerOptions) {
+	p, err := resolvePath(x, "rename", options.PathFunc)
 	if err != nil {
 		writePathError(x, err)
 		return
@@ -616,9 +633,19 @@ func handlePatch(x *vigo.X, filesystem FS, pf PathFunc) {
 		return
 	}
 
+	// "to" is UFS-root-relative (no HTTP mount prefix). Route it through the
+	// same validation pipeline as the source path: custom hook first (permission
+	// checks live there), then validatePath.
 	to := req.To
-	if len(to) > 0 && to[0] == '/' {
-		to = to[1:]
+	if options.RenameToFunc != nil {
+		if to, err = options.RenameToFunc(x, to); err != nil {
+			writePathError(x, err)
+			return
+		}
+	}
+	if to, err = validatePath(to, "rename"); err != nil {
+		writePathError(x, err)
+		return
 	}
 
 	if statFS, ok := filesystem.(fs.StatFS); ok {
@@ -783,6 +810,8 @@ func serveDirListHead(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo, d
 	data, _ := json.Marshal(entry)
 	x.Header().Set("Content-Type", "application/json")
 	x.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	// Explicit directory marker for HEAD clients (see handleHead file branch).
+	x.Header().Set("X-UFS-Dir", "true")
 	x.WriteHeader(http.StatusOK)
 }
 
@@ -878,7 +907,7 @@ func NewRWHandler(fsLoader *FS, opts ...HttpOption) func(*vigo.X) {
 				x.WriteHeader(http.StatusMethodNotAllowed)
 				return
 			}
-			handlePatch(x, filesystem, options.PathFunc)
+			handlePatch(x, filesystem, options)
 		case http.MethodOptions:
 			handleOptions(x, options)
 		default:
