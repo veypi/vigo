@@ -51,7 +51,7 @@
 - ✅ 给 `server` 增加合理的默认超时和 `MaxHeaderBytes`。(v0.7.0: 默认 ShutdownTimeout 调整为 1s)
 - ✅ 增加优雅关闭能力，包括 HTTP server 和 event manager 的 shutdown。(v0.7.0: App.Exit 生命周期钩子 + functional options)
 - 统一 body size limit，打通 `Config.PostMaxMemory` 与实际解析逻辑。
-- ✅ 明确可信代理策略，修正 `GetRemoteIP` 的默认行为。(v0.7.0: Config.TrustedProxies / WithTrustedProxies)
+- ✅ 明确可信代理策略，修正 `GetRemoteIP` 的默认行为。(v0.7.1: 移除 TrustedProxies 白名单配置，始终信任 `X-Forwarded-For` / `X-Real-IP`)
 
 ## P1 主体一致性
 

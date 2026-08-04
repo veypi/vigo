@@ -117,7 +117,7 @@ Vigo 支持将 HTTP 请求参数自动解析到 Go 结构体中。
 
 **请求来源说明**:
 - 请求来源解析位于 `contrib/requestmeta`，例如 `requestmeta.RemoteIP(x)`。
-- 只有在 `Config.TrustedProxies` 或 `WithTrustedProxies(...)` 显式配置可信代理后，才会信任 `X-Forwarded-For` / `X-Real-IP`。
+- `requestmeta.RemoteIP(x)` 始终信任 `X-Forwarded-For` / `X-Real-IP` 转发头（v0.7.1 起移除可信代理白名单配置）。
 
 **请求追踪说明**:
 - Server 默认会生成或透传请求 ID，并写回响应头，默认头名为 `X-Request-ID`。
