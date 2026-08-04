@@ -38,6 +38,7 @@ func NewServer(opts ...func(*Config)) (*Application, error) {
 		config: c,
 		router: NewRouter(),
 	}
+	app.router.(*route).config = c
 	app.server = &http.Server{
 		Addr:              c.Url(),
 		TLSConfig:         c.TlsCfg,
@@ -72,7 +73,6 @@ func (app *Application) Domain(d string) Router {
 	newNouter := NewRouter()
 	fc := func(w http.ResponseWriter, r *http.Request) func(http.ResponseWriter, *http.Request) {
 		if r.Host == d {
-			logv.Warn().Msg(r.Host)
 			return newNouter.ServeHTTP
 		}
 		return nil
@@ -93,14 +93,13 @@ func (app *Application) Domain(d string) Router {
 func (app *Application) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	reqID := app.requestID(r)
 	w.Header().Set(app.config.RequestIDHeader, reqID)
-	ctx := context.WithValue(r.Context(), configContextKey, app.config)
-	ctx = context.WithValue(ctx, requestIDContextKey, reqID)
+	ctx := context.WithValue(r.Context(), requestIDContextKey, reqID)
 	r = r.WithContext(ctx)
 	rw := &responseCapture{ResponseWriter: w}
 	if !app.config.DisableReqLog {
 		start := nanotime()
 		defer func() {
-			if rw.StatusCode() >= 400 {
+			if rw.StatusCode() >= 500 {
 				logv.WithNoCaller.Warn().
 					Str("request_id", reqID).
 					Int("status", rw.StatusCode()).

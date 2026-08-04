@@ -57,6 +57,14 @@ type spaConfig struct {
 // Default: returns x.PathParams.Get("path").
 type PathFunc func(*vigo.X) (string, error)
 
+// RenameToFunc validates and normalizes the rename destination (the "to" field
+// of a PATCH rename request). The input is the raw client value, expected to be
+// UFS-root-relative (no HTTP mount prefix). validatePath is applied to the
+// returned value — implementations don't need to validate the format.
+// Return an error to reject the rename (e.g., 403 for unauthorized destinations).
+// Default: the raw value passed through validatePath only.
+type RenameToFunc func(*vigo.X, string) (string, error)
+
 func defaultPathFunc(x *vigo.X) (string, error) {
 	return x.PathParams.Get("path"), nil
 }
@@ -72,12 +80,30 @@ func resolvePath(x *vigo.X, op string, pf PathFunc) (string, error) {
 	return validatePath(p, op)
 }
 
+// writePathError writes a JSON error response for path validation failures.
+func writePathError(x *vigo.X, err error) {
+	code := 400
+	msg := err.Error()
+	if e, ok := err.(*vigo.Error); ok {
+		code = e.Code
+		if code > 999 {
+			code, _ = strconv.Atoi(strconv.Itoa(code)[:3])
+		}
+		msg = e.Message
+	}
+	x.Header().Set("Content-Type", "application/json; charset=utf-8")
+	x.WriteHeader(code)
+	b, _ := json.Marshal(map[string]any{"code": code, "message": msg})
+	x.Write(b)
+}
+
 // HandlerOptions configures the HTTP handler behavior for both read-only and read/write handlers.
 // Write-specific fields (AllowPut, etc.) are ignored by NewHandler.
 type HandlerOptions struct {
 	CacheControl string
 	ETagCache    map[string]string
 	PathFunc     PathFunc
+	RenameToFunc RenameToFunc
 	MaxDepth     int
 	AllowSearch  bool
 
@@ -136,6 +162,10 @@ func WithAllowSearch(v bool) HttpOption {
 
 func WithPathFunc(pf PathFunc) HttpOption {
 	return func(o *HandlerOptions) { o.PathFunc = pf }
+}
+
+func WithRenameToFunc(fn RenameToFunc) HttpOption {
+	return func(o *HandlerOptions) { o.RenameToFunc = fn }
 }
 
 func WithETagCache(m map[string]string) HttpOption {
@@ -276,7 +306,7 @@ func trySearch(x *vigo.X, filesystem fs.FS, searchPath string, options *HandlerO
 	}
 	results, err := Search(filesystem, searchPath, glob, pattern, limit, ignoreCase)
 	if err != nil {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return true
 	}
 	x.JSON(results)
@@ -296,12 +326,12 @@ func resolveSpaLazy(spa *spaFile) {
 		vars := spa.attrsFn()
 		tmpl, err := template.New(spa.name).Parse(string(spa.content))
 		if err != nil {
-			logv.Warn().Msgf("ufs: SPA template parse %q: %v", spa.name, err)
+			logv.Error().Msgf("ufs: SPA template parse %q: %v", spa.name, err)
 			return
 		}
 		var buf bytes.Buffer
 		if err := tmpl.Execute(&buf, vars); err != nil {
-			logv.Warn().Msgf("ufs: SPA template execute %q: %v", spa.name, err)
+			logv.Error().Msgf("ufs: SPA template execute %q: %v", spa.name, err)
 			return
 		}
 		spa.content = buf.Bytes()
@@ -343,7 +373,7 @@ func serveSpaHead(x *vigo.X, spa *spaFile, options *HandlerOptions) {
 func handleGet(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 	p, err := resolvePath(x, "open", options.PathFunc)
 	if err != nil {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return
 	}
 
@@ -382,15 +412,14 @@ func handleGet(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 			return
 		}
 		if options.MaxDepth <= 0 {
-			x.WriteHeader(http.StatusForbidden)
+			if options.spa != nil {
+				serveSpa(x, options.spa, options)
+			} else {
+				x.WriteHeader(http.StatusForbidden)
+			}
 			return
 		}
 		serveDirList(x, filesystem, p, stat, parseDepth(x.Request, options))
-		return
-	}
-
-	if options.spa != nil && !skipFallback(x) {
-		serveSpa(x, options.spa, options)
 		return
 	}
 
@@ -410,7 +439,7 @@ func handleGet(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 func handleHead(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 	p, err := resolvePath(x, "open", options.PathFunc)
 	if err != nil {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return
 	}
 
@@ -455,15 +484,14 @@ func handleHead(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 			return
 		}
 		if options.MaxDepth <= 0 {
-			x.WriteHeader(http.StatusForbidden)
+			if options.spa != nil {
+				serveSpaHead(x, options.spa, options)
+			} else {
+				x.WriteHeader(http.StatusForbidden)
+			}
 			return
 		}
 		serveDirListHead(x, filesystem, p, stat, parseDepth(x.Request, options))
-		return
-	}
-
-	if options.spa != nil && !skipFallback(x) {
-		serveSpaHead(x, options.spa, options)
 		return
 	}
 
@@ -473,6 +501,10 @@ func handleHead(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 			x.WriteHeader(http.StatusNotModified)
 			return
 		}
+		// Explicit non-directory marker: lets HEAD clients distinguish a regular
+		// file from a directory without relying on Content-Type heuristics
+		// (e.g. a .json file also yields application/json).
+		x.Header().Set("X-UFS-Dir", "false")
 		setCacheHeaders(x.ResponseWriter(), etag, stat.ModTime(), options.CacheControl)
 		http.ServeContent(x.ResponseWriter(), x.Request, stat.Name(), stat.ModTime(), rs)
 		return
@@ -487,7 +519,7 @@ func handleHead(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 func handlePut(x *vigo.X, filesystem FS, options *HandlerOptions) {
 	p, err := resolvePath(x, "write", options.PathFunc)
 	if err != nil {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return
 	}
 
@@ -509,7 +541,7 @@ func handlePut(x *vigo.X, filesystem FS, options *HandlerOptions) {
 			x.WriteHeader(http.StatusRequestEntityTooLarge)
 			return
 		}
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return
 	}
 
@@ -528,7 +560,7 @@ func handlePut(x *vigo.X, filesystem FS, options *HandlerOptions) {
 func handleDelete(x *vigo.X, filesystem FS, pf PathFunc) {
 	p, err := resolvePath(x, "remove", pf)
 	if err != nil {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return
 	}
 
@@ -551,7 +583,7 @@ func handleDelete(x *vigo.X, filesystem FS, pf PathFunc) {
 func handleMkcol(x *vigo.X, filesystem FS, pf PathFunc) {
 	p, err := resolvePath(x, "mkdir", pf)
 	if err != nil {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return
 	}
 
@@ -579,31 +611,41 @@ type patchRequest struct {
 	To     string `json:"to"`
 }
 
-func handlePatch(x *vigo.X, filesystem FS, pf PathFunc) {
-	p, err := resolvePath(x, "rename", pf)
+func handlePatch(x *vigo.X, filesystem FS, options *HandlerOptions) {
+	p, err := resolvePath(x, "rename", options.PathFunc)
 	if err != nil {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return
 	}
 
 	var req patchRequest
 	if err := json.NewDecoder(x.Request.Body).Decode(&req); err != nil {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, err)
 		return
 	}
 
 	if req.Action != "rename" {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, fmt.Errorf("rename: action required"))
 		return
 	}
 	if req.To == "" {
-		x.WriteHeader(http.StatusBadRequest)
+		writePathError(x, fmt.Errorf("rename: to is required"))
 		return
 	}
 
+	// "to" is UFS-root-relative (no HTTP mount prefix). Route it through the
+	// same validation pipeline as the source path: custom hook first (permission
+	// checks live there), then validatePath.
 	to := req.To
-	if len(to) > 0 && to[0] == '/' {
-		to = to[1:]
+	if options.RenameToFunc != nil {
+		if to, err = options.RenameToFunc(x, to); err != nil {
+			writePathError(x, err)
+			return
+		}
+	}
+	if to, err = validatePath(to, "rename"); err != nil {
+		writePathError(x, err)
+		return
 	}
 
 	if statFS, ok := filesystem.(fs.StatFS); ok {
@@ -768,6 +810,8 @@ func serveDirListHead(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo, d
 	data, _ := json.Marshal(entry)
 	x.Header().Set("Content-Type", "application/json")
 	x.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	// Explicit directory marker for HEAD clients (see handleHead file branch).
+	x.Header().Set("X-UFS-Dir", "true")
 	x.WriteHeader(http.StatusOK)
 }
 
@@ -863,7 +907,7 @@ func NewRWHandler(fsLoader *FS, opts ...HttpOption) func(*vigo.X) {
 				x.WriteHeader(http.StatusMethodNotAllowed)
 				return
 			}
-			handlePatch(x, filesystem, options.PathFunc)
+			handlePatch(x, filesystem, options)
 		case http.MethodOptions:
 			handleOptions(x, options)
 		default:

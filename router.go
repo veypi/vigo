@@ -265,6 +265,9 @@ func (r *route) match(path string, start int, method string, x *X) (*route, []an
 func (r *route) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	x := acquire()
 	defer release(x)
+	if r.config != nil && r.config.PostMaxMemory > 0 {
+		x.maxMemory = int64(r.config.PostMaxMemory)
+	}
 	x.Request = req
 	x.writer = w
 

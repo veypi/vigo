@@ -276,8 +276,8 @@ func (x *X) Parse(target any) error {
 }
 
 func (x *X) postMaxMemory() int64 {
-	if cfg := x.Config(); cfg != nil && cfg.PostMaxMemory > 0 {
-		return int64(cfg.PostMaxMemory)
+	if x.maxMemory > 0 {
+		return x.maxMemory
 	}
 	return 32 << 20
 }

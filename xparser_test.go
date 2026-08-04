@@ -2,7 +2,6 @@ package vigo
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -42,8 +41,8 @@ func createTestXWithConfig(method, urlStr string, body interface{}, cfg *Config)
 	if err != nil {
 		return nil, err
 	}
-	if cfg != nil {
-		x.Request = x.Request.WithContext(context.WithValue(x.Request.Context(), configContextKey, cfg))
+	if cfg != nil && cfg.PostMaxMemory > 0 {
+		x.maxMemory = int64(cfg.PostMaxMemory)
 	}
 	return x, nil
 }
