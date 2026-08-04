@@ -12,6 +12,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -31,8 +32,11 @@ func NewServer(opts ...func(*Config)) (*Application, error) {
 	for _, opt := range opts {
 		opt(c)
 	}
-	if err := c.IsValid(); err != nil {
-		return nil, err
+	if c.listener == nil {
+		// 注入 listener 场景（随机端口）：监听已真实建立，Host/Port 校验跳过
+		if err := c.IsValid(); err != nil {
+			return nil, err
+		}
 	}
 	app := &Application{
 		config: c,
@@ -142,11 +146,7 @@ func (app *Application) Run() error {
 	if e != nil {
 		return e
 	}
-	host := app.config.Host
-	if host == "0.0.0.0" {
-		host = "localhost"
-	}
-	logv.WithNoCaller.Info().Msgf("start on http://%s:%d ", host, app.config.Port)
+	logv.WithNoCaller.Info().Msgf("start on %s", app.Addr())
 	err := app.server.Serve(l)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
@@ -154,8 +154,30 @@ func (app *Application) Run() error {
 	return err
 }
 
+// Addr 返回实际监听地址：注入 listener 时以其为准（随机端口场景），
+// 否则返回 {host}:{port}（0.0.0.0 展示为 localhost）。
+func (app *Application) Addr() string {
+	l := app.listener
+	if l == nil {
+		l = app.config.listener
+	}
+	if l != nil {
+		return l.Addr().String()
+	}
+	host := app.config.Host
+	if host == "0.0.0.0" {
+		host = "localhost"
+	}
+	return fmt.Sprintf("%s:%d", host, app.config.Port)
+}
+
 func (app *Application) netListener() (net.Listener, error) {
 	if app.listener != nil {
+		return app.listener, nil
+	}
+	// 注入的 listener（WithListener）：首次使用时接管
+	if app.config.listener != nil {
+		app.listener = app.config.listener
 		return app.listener, nil
 	}
 	l, err := net.Listen("tcp", app.config.Url())

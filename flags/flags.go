@@ -29,15 +29,23 @@ func New(name string, des string) *Flags {
 
 type Flags struct {
 	flag.FlagSet
-	des     string
-	depth   int
-	subs    []*Flags
-	parent  *Flags
-	help    string
-	runFunc func() error
-	Command func() error
-	Before  func() error
-	After   func(error) error
+	des       string
+	depth     int
+	subs      []*Flags
+	parent    *Flags
+	help      string
+	runFunc   func() error
+	Command   func() error
+	Before    func() error
+	After     func(error) error
+	allowArgs bool // AllowArgs 开启后允许位置参数（Command 内经 f.Args() 读取）
+}
+
+// AllowArgs 允许本命令携带位置参数（默认拒绝）。
+// 常用于子命令场景：如 `aic bind <key>`、`aic config set <key> <value>`。
+func (f *Flags) AllowArgs() *Flags {
+	f.allowArgs = true
+	return f
 }
 
 func (f *Flags) Run() (err error) {
@@ -122,7 +130,7 @@ func (f *Flags) parse(arguments []string) (err error) {
 	}
 	if f.Command != nil {
 		f.set_run_func(func() error {
-			if f.NArg() != 0 {
+			if !f.allowArgs && f.NArg() != 0 {
 				return fmt.Errorf("unexpected argument: %s", f.Arg(0))
 			}
 			err := f.fire_before_func()
