@@ -13,8 +13,8 @@ import (
 	"os"
 	"strings"
 	"time"
+	"uuid"
 
-	"github.com/google/uuid"
 	"gorm.io/gorm"
 )
 

@@ -18,8 +18,8 @@ import (
 	"net/http"
 	"strings"
 	"sync"
+	"uuid"
 
-	"github.com/google/uuid"
 	"github.com/veypi/vigo/logv"
 	"golang.org/x/net/netutil"
 )
@@ -218,7 +218,7 @@ func (app *Application) requestID(r *http.Request) string {
 	if reqID := strings.TrimSpace(r.Header.Get(header)); reqID != "" {
 		return reqID
 	}
-	return uuid.NewString()
+	return uuid.New().String()
 }
 
 type responseCapture struct {
