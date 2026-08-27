@@ -166,7 +166,7 @@ func init() {
 
 ### 5.2 测试代码示例
 
-建议每个插件文件（如 `main.go`）对应一个测试文件（如 `main_test.go`）。
+建议每个插件文件（如 `testdata/main.go`）对应一个测试文件（如 `main_test.go`）。
 
 ```go
 package main
@@ -186,9 +186,10 @@ func TestMyPlugin(t *testing.T) {
 	helper := plugin.NewTestHelper(t)
 
 	// 2. 加载插件
-	// 方式 A: 直接加载文件 (推荐用于 main.go 测试)
+	// 方式 A: 直接加载文件 (推荐用于 testdata/main.go 测试)
+	// 插件源放在 testdata/ 下：go build ./... 自动忽略，显式 -buildmode=plugin 不受影响
 	wd, _ := os.Getwd()
-	pluginPath := filepath.Join(wd, "main.go")
+	pluginPath := filepath.Join(wd, "testdata", "main.go")
 	if err := helper.Loader.Load(helper.Router, "/plugin", pluginPath); err != nil {
 		t.Fatalf("Failed to load plugin: %v", err)
 	}

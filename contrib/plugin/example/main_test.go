@@ -14,7 +14,7 @@ func TestMyPlugin(t *testing.T) {
 
 	// Load the plugin using the file path
 	wd, _ := os.Getwd()
-	pluginPath := filepath.Join(wd, "main.go")
+	pluginPath := filepath.Join(wd, "testdata", "main.go")
 
 	if err := helper.Loader.Load(helper.Router, "/plugin", pluginPath); err != nil {
 		t.Fatalf("Failed to load plugin: %v", err)
