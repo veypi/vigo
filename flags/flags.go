@@ -8,10 +8,13 @@
 package flags
 
 import (
+	"encoding/json"
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"runtime/debug"
+	"strings"
 
 	"github.com/veypi/vigo/logv"
 	"github.com/veypi/vigo/utils"
@@ -182,21 +185,37 @@ func (f *Flags) SubCommand(name, des string) *Flags {
 	return s
 }
 
+// LoadCfg 从文件加载配置到 cfg，按扩展名选择解析协议：.json → JSON，其余 → YAML。
+// 文件不存在时静默返回（配置文件可选）。
 func LoadCfg(path string, cfg interface{}) {
-	yamlFile, err := os.ReadFile(path)
-	if err != nil && !os.IsNotExist(err) {
-		logv.Warn().Msg(err.Error())
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if !os.IsNotExist(err) {
+			logv.Warn().Msg(err.Error())
+		}
 		return
 	}
-	err = yaml.Unmarshal(yamlFile, cfg)
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".json":
+		err = json.Unmarshal(data, cfg)
+	default:
+		err = yaml.Unmarshal(data, cfg)
+	}
 	if err != nil {
 		logv.Warn().Msg(err.Error())
 	}
 }
 
-// 会覆盖写入
+// DumpCfg 将 cfg 覆盖写入 path，按扩展名选择序列化协议：.json → JSON，其余 → YAML。
 func DumpCfg(path string, cfg interface{}) error {
-	body, err := yaml.Marshal(cfg)
+	var body []byte
+	var err error
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".json":
+		body, err = json.MarshalIndent(cfg, "", "  ")
+	default:
+		body, err = yaml.Marshal(cfg)
+	}
 	if err != nil {
 		return err
 	}
