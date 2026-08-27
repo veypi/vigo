@@ -8,7 +8,7 @@ import (
 
 var (
 	sharedRedisMu     sync.RWMutex
-	sharedRedisCfg    = Redis{Addr: "memory"}
+	sharedRedisCfg    = &Redis{Addr: "memory"}
 	sharedRedisClient *redis.Client
 )
 
@@ -30,7 +30,9 @@ func SetSharedRedis(client *redis.Client) {
 	sharedRedisClient = client
 }
 
-func SetSharedRedisConfig(cfg Redis) {
+// SetSharedRedisConfig 替换全局共享配置。cfg 必须是非零指针，
+// 内部直接持有并共享该指针（Redis 含 sync.Once 不可复制）。
+func SetSharedRedisConfig(cfg *Redis) {
 	sharedRedisMu.Lock()
 	defer sharedRedisMu.Unlock()
 	sharedRedisCfg = cfg
