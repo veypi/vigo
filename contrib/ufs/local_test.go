@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -127,5 +128,52 @@ func TestLocalFSSymlinkSearch(t *testing.T) {
 		if m.Path == "leak" {
 			t.Errorf("Search 穿透 symlink 泄露根外内容: %+v", m)
 		}
+	}
+}
+
+// TestValidatePathSegmentLength 单段名称长度硬校验：≤64 放行、>64 拒绝（读写同规则），
+// 错误同时满足 errors.Is(fs.ErrInvalid) 与 errors.Is(ErrNameTooLong)。
+func TestValidatePathSegmentLength(t *testing.T) {
+	lfs, _ := newLocalTestFS(t)
+	seg64 := strings.Repeat("a", MaxNameSegmentLen)
+	seg65 := strings.Repeat("b", MaxNameSegmentLen+1)
+	long := func(base string) string { return "dir/" + base }
+
+	// 边界：64 字节单段读写均放行。
+	if err := lfs.WriteFile(long(seg64), []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile(64-byte segment) err = %v; want nil", err)
+	}
+	if _, err := lfs.ReadFile(long(seg64)); err != nil {
+		t.Fatalf("ReadFile(64-byte segment) err = %v; want nil", err)
+	}
+
+	// 超限：65 字节单段读写均拒绝，且多段路径只拦超长段。
+	for _, op := range []struct {
+		name string
+		run  func(path string) error
+	}{
+		{"ReadFile", func(p string) error { _, err := lfs.ReadFile(p); return err }},
+		{"WriteFile", func(p string) error { return lfs.WriteFile(p, []byte("x"), 0o644) }},
+		{"Stat", func(p string) error { _, err := lfs.Stat(p); return err }},
+		{"RemoveAll", func(p string) error { return lfs.RemoveAll(p) }},
+	} {
+		for _, path := range []string{long(seg65), seg65 + "/ok.txt"} {
+			err := op.run(path)
+			if err == nil {
+				t.Errorf("%s(%q) err = nil; want segment-length rejection", op.name, path)
+				continue
+			}
+			if !errors.Is(err, fs.ErrInvalid) || !errors.Is(err, ErrNameTooLong) {
+				t.Errorf("%s(%q) err = %v; want Is(fs.ErrInvalid)+Is(ErrNameTooLong)", op.name, path, err)
+			}
+		}
+	}
+
+	// 根目录（"."）与常规路径不受影响。
+	if _, err := lfs.Stat("."); err != nil {
+		t.Errorf("Stat(root) err = %v; want nil", err)
+	}
+	if err := lfs.WriteFile("a/b/c.txt", []byte("x"), 0o644); err != nil {
+		t.Errorf("WriteFile(a/b/c.txt) err = %v; want nil", err)
 	}
 }

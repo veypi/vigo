@@ -9,6 +9,7 @@ package ufs
 
 import (
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -19,6 +20,16 @@ import (
 // 不支持下层文件系统的符号链接（os 调用会跟随 symlink，可越权访问根外文件）。
 // 任何路径段为 symlink 的操作一律拒绝（fail-closed），写入侧亦无创建 symlink 的 API。
 var ErrSymlinkNotSupported = errors.New("ufs: symlinks are not supported")
+
+// MaxNameSegmentLen 是 UFS 路径单段名称长度的硬上限（字节）。所有 UFS 操作
+// 读写一视同仁，超出即拒绝（fail-closed）。连锁约束：skill 注册名 ≤32、
+// 版本号 ≤16、审核试用副本名最坏 54——64 是给全部用户文件留余量的硬顶。
+const MaxNameSegmentLen = 64
+
+// ErrNameTooLong 表示路径中存在超过 MaxNameSegmentLen 的名称段。
+// 包装 fs.ErrInvalid（errors.Is 两者皆真）：HTTP 层沿用 fs.ErrInvalid 的
+// 400 映射即可，需要差异化文案时可 errors.Is(err, ErrNameTooLong) 判定。
+var ErrNameTooLong = fmt.Errorf("%w: name segment exceeds %d bytes", fs.ErrInvalid, MaxNameSegmentLen)
 
 // validatePath normalizes a path and validates it.
 // Leading "/" are stripped, "" and "/" become ".".
@@ -32,6 +43,11 @@ func validatePath(name, op string) (string, error) {
 	}
 	if !fs.ValidPath(name) {
 		return name, &fs.PathError{Op: op, Path: name, Err: fs.ErrInvalid}
+	}
+	for _, seg := range strings.Split(name, "/") {
+		if len(seg) > MaxNameSegmentLen {
+			return name, &fs.PathError{Op: op, Path: name, Err: ErrNameTooLong}
+		}
 	}
 	return name, nil
 }
