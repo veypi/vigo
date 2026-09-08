@@ -50,6 +50,7 @@ type ItemEntry struct {
 	Mime    string      `json:"mime"`
 	ModTime int64       `json:"mod_time"`
 	IsRepo  bool        `json:"is_repo"`
+	Branch  string      `json:"branch,omitempty"`
 	Items   []ItemEntry `json:"items,omitempty"`
 }
 

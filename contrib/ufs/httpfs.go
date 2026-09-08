@@ -9,6 +9,7 @@ package ufs
 
 import (
 	"bytes"
+	"crypto/sha1"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -225,7 +226,10 @@ func resolveSpa(fsys fs.FS, cfg *spaConfig) (*spaFile, error) {
 	spa := &spaFile{
 		name:    cfg.name,
 		content: content,
-		etag:    generateETag(int64(len(content)), modTime),
+		// 内容寻址 etag：go:embed 文件 mtime 恒为零，size+mtime 形态退化成
+		// 尺寸函数，同尺寸改动 304 假命中发旧内容。SPA content 已在内存，
+		// 哈希零额外成本——所有回退路径共享同一 content，etag 天然一致。
+		etag:    fmt.Sprintf(`"%x"`, sha1.Sum(content)),
 		modTime: modTime,
 		attrsFn: cfg.attrsFn,
 	}
@@ -263,19 +267,25 @@ func setCacheHeaders(w http.ResponseWriter, etag string, modTime time.Time, cach
 	w.Header().Set("Cache-Control", cacheControl)
 }
 
-func skipFallback(x *vigo.X) bool {
-	if x.Request.Header.Get("X-No-Fallback") != "" {
+// IsRawRequest 判定请求是否要求原样资源、跳过 SPA 回落：带 X-No-Fallback 头 /
+// ?x-no-fallback 参数 / Accept 不含 text/html（含无 Accept 的客户端，如 curl 与
+// vhtml 组件 loader）。浏览器页面导航（Accept: text/html、无上述标记）= 非 raw，
+// 由 SPA 壳接管。httpfs 内部与外部动态文件路由（如 aic/skills 包文件）共用。
+func IsRawRequest(r *http.Request) bool {
+	if r.Header.Get("X-No-Fallback") != "" {
 		return true
 	}
-	if x.Request.URL.Query().Has("x-no-fallback") {
+	if r.URL.Query().Has("x-no-fallback") {
 		return true
 	}
-	accept := x.Request.Header.Get("Accept")
+	accept := r.Header.Get("Accept")
 	if accept == "" {
 		return true
 	}
 	return !strings.Contains(accept, "text/html")
 }
+
+func skipFallback(x *vigo.X) bool { return IsRawRequest(x.Request) }
 
 // =============================================================================
 // Search helpers
@@ -304,7 +314,16 @@ func trySearch(x *vigo.X, filesystem fs.FS, searchPath string, options *HandlerO
 		x.WriteHeader(http.StatusForbidden)
 		return true
 	}
-	results, err := Search(filesystem, searchPath, glob, pattern, limit, ignoreCase)
+	depth := 0
+	if raw := x.Request.URL.Query().Get("depth"); raw != "" {
+		value, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || value < 0 {
+			x.WriteHeader(http.StatusBadRequest)
+			return true
+		}
+		depth = value
+	}
+	results, err := SearchDepth(filesystem, searchPath, glob, pattern, limit, ignoreCase, depth)
 	if err != nil {
 		writePathError(x, err)
 		return true
@@ -699,18 +718,25 @@ func handleOptions(x *vigo.X, options *HandlerOptions) {
 // Directory listing helpers
 // =============================================================================
 
-func isGitRepo(filesystem fs.FS, p string) bool {
-	if statFS, ok := filesystem.(fs.StatFS); ok {
-		info, err := statFS.Stat(path.Join(p, ".git"))
-		return err == nil && info.IsDir()
+// gitRepoInfo reports whether p is a git repository root (.git is a directory)
+// and, when it is, the current branch parsed from .git/HEAD
+// ("ref: refs/heads/<name>"; detached HEAD or read failure yields no branch).
+func gitRepoInfo(filesystem fs.FS, p string) (bool, string) {
+	gitDir := path.Join(p, ".git")
+	info, err := fs.Stat(filesystem, gitDir)
+	if err != nil || !info.IsDir() {
+		return false, ""
 	}
-	f, err := filesystem.Open(path.Join(p, ".git"))
+	data, err := fs.ReadFile(filesystem, path.Join(gitDir, "HEAD"))
 	if err != nil {
-		return false
+		return true, ""
 	}
-	defer f.Close()
-	info, err := f.Stat()
-	return err == nil && info.IsDir()
+	line := strings.TrimSpace(strings.SplitN(string(data), "\n", 2)[0])
+	const prefix = "ref: refs/heads/"
+	if !strings.HasPrefix(line, prefix) {
+		return true, ""
+	}
+	return true, strings.TrimPrefix(line, prefix)
 }
 
 func parseDepth(r *http.Request, options *HandlerOptions) int {
@@ -746,11 +772,12 @@ func buildItemTree(filesystem fs.FS, p string, stat fs.FileInfo, depth int) (*It
 		var modTime int64
 		var mimeType string
 		var isRepo bool
+		var branch string
 		if err == nil {
 			size = info.Size()
 			modTime = info.ModTime().Unix()
 			if e.IsDir() {
-				isRepo = isGitRepo(filesystem, path.Join(p, e.Name()))
+				isRepo, branch = gitRepoInfo(filesystem, path.Join(p, e.Name()))
 			} else {
 				mimeType = mime.TypeByExtension(path.Ext(e.Name()))
 			}
@@ -763,6 +790,7 @@ func buildItemTree(filesystem fs.FS, p string, stat fs.FileInfo, depth int) (*It
 			ModTime: modTime,
 			Mime:    mimeType,
 			IsRepo:  isRepo,
+			Branch:  branch,
 		}
 
 		if e.IsDir() && depth > 1 {
@@ -782,12 +810,14 @@ func buildItemTree(filesystem fs.FS, p string, stat fs.FileInfo, depth int) (*It
 		items = append(items, item)
 	}
 
+	isRepo, branch := gitRepoInfo(filesystem, p)
 	return &ItemEntry{
 		Name:    stat.Name(),
 		Dir:     true,
 		Size:    stat.Size(),
 		ModTime: stat.ModTime().Unix(),
-		IsRepo:  isGitRepo(filesystem, p),
+		IsRepo:  isRepo,
+		Branch:  branch,
 		Items:   items,
 	}, nil
 }
