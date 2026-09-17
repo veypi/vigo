@@ -260,6 +260,17 @@ func CreateUser(x *vigo.X, req *UserReq) (*UserResp, error) {
 router.Post("/users", CreateUser)
 ```
 
+#### 3.3 响应压缩（contrib/compress）
+
+`contrib/compress` 提供开箱即用的 gzip 响应压缩中间件：仅在客户端声明 `Accept-Encoding: gzip` 且响应类型可压缩时生效，自动跳过已编码响应、Range 请求、协议升级（WebSocket）、HEAD 请求、二进制类型、已知过小响应体与无体状态码（1xx/204/205/304/206）。
+
+```go
+import "github.com/veypi/vigo/contrib/compress"
+
+router.Use(compress.New().Handler)
+// 可选：compress.New(compress.WithMinSize(2048), compress.WithLevel(gzip.BestSpeed))
+```
+
 ### 4. 控制流
 - **自动执行**: 默认情况下，流水线中的 Handler 会自动顺序执行。
 - **x.Next()**: 在中间件中调用 `x.Next()` 可以显式执行后续 Handler，并在其返回后继续执行当前中间件的剩余逻辑（用于后置处理，如计算耗时）。
