@@ -139,6 +139,14 @@ func (x *X) ResponseWriter() http.ResponseWriter {
 	return x.writer
 }
 
+// SetResponseWriter replaces the underlying http.ResponseWriter.
+// Middlewares (e.g. contrib/compress) may wrap the writer and install the
+// wrapper here; all subsequent X writes (Write/JSON/String/File/Embed/
+// HTMLTemplate/Flush) then go through the replacement.
+func (x *X) SetResponseWriter(w http.ResponseWriter) {
+	x.writer = w
+}
+
 func (x *X) Get(key string) any {
 	if x.vars != nil {
 		if v, ok := x.vars[key]; ok {
