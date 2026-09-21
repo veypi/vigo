@@ -227,20 +227,9 @@ event.Add("task.b", func() error { ... }, event.After("init.db"))
 
 Event distributed locking uses shared Redis by default. Configure shared Redis through `contrib/config` when the application uses Redis-backed contrib modules together.
 
-### 9.3 Auth Interface
+### 9.3 Application Authentication
 
-```go
-import "github.com/veypi/vigo/contrib/auth"
-
-// cfg/config.go - 业务模块持有 Auth 对象
-var Auth auth.Auth
-// api/init.go
-
-Router.Use(cfg.Auth.Login())
-Router.Post("resource", cfg.Auth.RequireCreate("resource"), "description", createResource)
-```
-
-See: `go doc github.com/veypi/vigo/contrib/auth.Auth`
+Authentication and resource permissions are provided by the application layer. VBase declares its contracts in `github.com/veypi/vbase/types` and provides middleware in `github.com/veypi/vbase/libs/auth`. Vigo provides request contexts and routing without owning the application's permission model.
 
 ### 9.4 Shared Redis / Request Meta
 
