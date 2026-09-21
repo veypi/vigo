@@ -14,6 +14,10 @@ func TestAutoRegisterShort(t *testing.T) {
 	cfg := &Config{}
 	f := New("test", "test flags")
 	f.AutoRegister(cfg)
+	f.Command = func() error { return nil }
+	if err := f.ParseArgs(nil); err != nil {
+		t.Fatal(err)
+	}
 
 	// Verify long flags
 	if f.Lookup("name") == nil {
@@ -77,6 +81,10 @@ func TestCustomTypes(t *testing.T) {
 	cfg := &CustomConfig{}
 	f := New("test_custom", "test custom types")
 	f.AutoRegister(cfg)
+	f.Command = func() error { return nil }
+	if err := f.ParseArgs(nil); err != nil {
+		t.Fatal(err)
+	}
 
 	// Check default values
 	if cfg.Key != "default-key" {

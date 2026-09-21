@@ -10,6 +10,7 @@ package vigo
 import (
 	"context"
 	"errors"
+	"flag"
 	"io"
 	"os"
 	"os/signal"
@@ -111,7 +112,7 @@ func (a *app[T]) Run() error {
 		}
 		return 4000
 	}(), "port (env: PORT)")
-	configFile := cmdMain.String("f", "./dev.yaml", "the config file")
+	configFile := cmdMain.ConfigFileFlag("f", "./dev.yaml")
 	loggerLevel := cmdMain.String("l", "debug", "logger_level")
 	loggerPath := cmdMain.String("logger_path", "", "logger_path")
 	loggerMode := cmdMain.String("logger_mode", "console", "logger mode: console | nocolor | json")
@@ -120,8 +121,6 @@ func (a *app[T]) Run() error {
 		return flags.DumpCfg(*configFile, a.Config())
 	}
 	cmdMain.Before = func() error {
-		flags.LoadCfg(*configFile, a.Config())
-		cmdMain.Parse()
 		logv.SetLevel(logv.AssertFuncErr(logv.ParseLevel(*loggerLevel)))
 		var writers []io.Writer
 		switch *loggerMode {
@@ -179,6 +178,11 @@ func (a *app[T]) Run() error {
 			return err
 		}
 	}
-	cmdMain.Parse()
+	if err := cmdMain.Parse(); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			return nil
+		}
+		return err
+	}
 	return cmdMain.Run()
 }

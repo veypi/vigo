@@ -16,6 +16,9 @@ Vigo 是一个高性能、简洁易用的 Go Web 框架，专为构建现代 RES
 
 ## 📦 安装
 
+配置文件、环境变量和命令行参数统一由 [flags](flags/README.md) 管理，
+优先级为 **命令行 > 环境变量 > 配置文件 > 默认值**，支持配置文件逐字段容错。
+
 ```bash
 go mod init your-project
 go get github.com/veypi/vigo

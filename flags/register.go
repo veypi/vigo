@@ -1,137 +1,36 @@
-//
-// register.go
-// Copyright (C) 2025 veypi <i@veypi.com>
-//
-// Distributed under terms of the MIT license.
-//
-
 package flags
 
 import (
+	"encoding"
 	"encoding/json"
+	"flag"
 	"fmt"
 	"os"
 	"reflect"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/joho/godotenv"
-	"github.com/veypi/vigo/logv"
 )
 
-// isZeroValue 检查值是否为零值
-func isZeroValue(v reflect.Value) bool {
-	switch v.Kind() {
-	case reflect.String:
-		return v.String() == ""
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		return v.Int() == 0
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		return v.Uint() == 0
-	case reflect.Bool:
-		return !v.Bool()
-	case reflect.Float32, reflect.Float64:
-		return v.Float() == 0
-	case reflect.Ptr, reflect.Interface:
-		return v.IsNil()
-	case reflect.Struct:
-		// 对于结构体，检查所有字段是否都是零值
-		for i := 0; i < v.NumField(); i++ {
-			if !isZeroValue(v.Field(i)) {
-				return false
-			}
-		}
-		return true
-	case reflect.Slice, reflect.Array:
-		return v.Len() == 0
-	case reflect.Map:
-		return v.Len() == 0
-	default:
-		// 检查是否是 time.Duration 类型
-		if v.Type() == reflect.TypeOf(time.Duration(0)) {
-			return v.Int() == 0
-		}
-		// 对于其他复杂类型，认为不是零值
-		return false
-	}
-}
-
 func LoadEnvOr(key, defaultValue string) string {
-	v, ok := os.LookupEnv(key)
-	if ok {
-		return v
+	if value, ok := os.LookupEnv(key); ok {
+		return value
 	}
 	return defaultValue
 }
 
-// getDefaultValue 获取字段的默认值（优先使用环境变量，其次使用字段当前值，最后使用default标签）
-func getDefaultValue(field reflect.Value, envKey, defaultTag string) string {
-	// 优先使用环境变量
-	if envValue, ok := os.LookupEnv(envKey); ok {
-		return envValue
-	}
-
-	// 如果字段值不是零值，则使用字段的当前值作为默认值
-	if !isZeroValue(field) {
-		switch field.Kind() {
-		case reflect.String:
-			return field.String()
-		case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-			// 检查是否是 time.Duration 类型
-			if field.Type() == reflect.TypeOf(time.Duration(0)) {
-				duration := time.Duration(field.Int())
-				return duration.String()
-			}
-			return strconv.FormatInt(field.Int(), 10)
-		case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-			return strconv.FormatUint(field.Uint(), 10)
-		case reflect.Bool:
-			return strconv.FormatBool(field.Bool())
-		case reflect.Float32, reflect.Float64:
-			return strconv.FormatFloat(field.Float(), 'g', -1, 64)
-		case reflect.Slice, reflect.Array, reflect.Map:
-			// 对于复杂类型，返回JSON字符串
-			if data, err := json.Marshal(field.Interface()); err == nil {
-				return string(data)
-			}
-		default:
-			// 检查是否是 time.Time 类型
-			if field.Type() == reflect.TypeOf(time.Time{}) {
-				t := field.Interface().(time.Time)
-				return t.Format(time.RFC3339)
-			}
-		}
-	}
-
-	// 否则使用default标签的值
-	return defaultTag
-}
-
-// getFieldDescription 获取字段的描述信息
-func getFieldDescription(fieldType reflect.StructField, flagName, envKey string) string {
-	if usage := fieldType.Tag.Get("desc"); usage != "" {
-		return fmt.Sprintf("%s (env: %s)", usage, envKey)
-	}
-
-	// 最后使用默认描述
-	return fmt.Sprintf("set %s value (env: %s)", flagName, envKey)
-}
-
-// buildEnvKey 构建环境变量键名，支持嵌套结构体
-func buildEnvKey(prefix, fieldName string) string {
+func buildEnvKey(prefix, name string) string {
 	if prefix == "" {
-		return strings.ToUpper(fieldName)
+		return strings.ToUpper(name)
 	}
-	return fmt.Sprintf("%s_%s", prefix, strings.ToUpper(fieldName))
+	return prefix + "_" + strings.ToUpper(name)
 }
 
-// buildFlagName 构建命令行参数名，支持嵌套结构体
-func buildFlagName(prefix, fieldName string) string {
+func buildFlagName(prefix, name string) string {
 	if prefix == "" {
-		return fieldName
+		return name
 	}
-	return fmt.Sprintf("%s.%s", prefix, fieldName)
+	return prefix + "." + name
 }
 
 // DurationValue 自定义 Duration 类型的命令行参数
@@ -213,364 +112,228 @@ func (f *FileValue) Set(filePath string) error {
 	return nil
 }
 
-// AutoRegister 自动注册命令行参数，支持嵌套结构体
-func (fs *Flags) AutoRegister(config any) {
-	godotenv.Load()
-	fs.autoRegisterWithPrefix(config, "", "")
-}
-
-func (fs *Flags) registerValue(field reflect.Value, flagName, defaultValue, usage string) {
-	// 根据字段类型注册不同的参数类型
-	switch {
-	case field.Type() == reflect.TypeOf(time.Duration(0)):
-		// 处理 time.Duration 类型
-		defaultDuration := time.Duration(0)
-		if defaultValue != "" {
-			if parsed, err := time.ParseDuration(defaultValue); err == nil {
-				defaultDuration = parsed
-			}
-		}
-		durationPtr := (*DurationValue)(field.Addr().Interface().(*time.Duration))
-		*durationPtr = DurationValue(defaultDuration)
-		fs.Var(durationPtr, flagName, usage)
-
-	case field.Type() == reflect.TypeOf(time.Time{}):
-		// 处理 time.Time 类型
-		defaultTime := time.Time{}
-		if defaultValue != "" {
-			if parsed, err := time.Parse(time.RFC3339, defaultValue); err == nil {
-				defaultTime = parsed
-			}
-		}
-		timePtr := (*TimeValue)(field.Addr().Interface().(*time.Time))
-		*timePtr = TimeValue(defaultTime)
-		fs.Var(timePtr, flagName, usage)
-
-	case field.Kind() == reflect.Slice || field.Kind() == reflect.Array:
-		// 处理 slice 和 array 类型，从文件加载
-		fileValue := NewFileValue(field)
-		usage += " (file path to JSON array)"
-
-		// 如果有默认值，尝试从文件加载或解析JSON
-		if defaultValue != "" {
-			if err := loadDefaultComplexValue(field, defaultValue); err != nil {
-				fmt.Printf("Warning: failed to load default value for %s: %v\n", flagName, err)
-			}
-		}
-		fs.Var(fileValue, flagName, usage)
-
-	case field.Kind() == reflect.Map:
-		// 处理 map 类型，从文件加载
-		fileValue := NewFileValue(field)
-		usage += " (file path to JSON object)"
-
-		// 如果有默认值，尝试从文件加载或解析JSON
-		if defaultValue != "" {
-			if err := loadDefaultComplexValue(field, defaultValue); err != nil {
-				fmt.Printf("Warning: failed to load default value for %s: %v\n", flagName, err)
-			}
-		}
-		fs.Var(fileValue, flagName, usage)
-
-	case field.Kind() == reflect.String:
-		if v, ok := field.Addr().Interface().(*string); ok {
-			fs.StringVar(v, flagName, defaultValue, usage)
-		} else {
-
-			val := &genericValue{field: field}
-			if defaultValue != "" {
-				val.Set(defaultValue)
-				usage += fmt.Sprintf(" (default: %s)", defaultValue)
-			}
-			fs.Var(val, flagName, usage)
-		}
-
-	case field.Kind() == reflect.Int:
-		if v, ok := field.Addr().Interface().(*int); ok {
-			defaultInt, err := strconv.Atoi(defaultValue)
-			if err != nil {
-				defaultInt = 0
-			}
-			fs.IntVar(v, flagName, defaultInt, usage)
-		} else {
-			val := &genericValue{field: field}
-			if defaultValue != "" {
-				val.Set(defaultValue)
-				usage += fmt.Sprintf(" (default: %s)", defaultValue)
-			}
-			fs.Var(val, flagName, usage)
-		}
-
-	case field.Kind() == reflect.Int64:
-		if v, ok := field.Addr().Interface().(*int64); ok {
-			defaultInt64, err := strconv.ParseInt(defaultValue, 10, 64)
-			if err != nil {
-				defaultInt64 = 0
-			}
-			fs.Int64Var(v, flagName, defaultInt64, usage)
-		} else {
-			val := &genericValue{field: field}
-			if defaultValue != "" {
-				val.Set(defaultValue)
-				usage += fmt.Sprintf(" (default: %s)", defaultValue)
-			}
-			fs.Var(val, flagName, usage)
-		}
-
-	case field.Kind() == reflect.Bool:
-		if v, ok := field.Addr().Interface().(*bool); ok {
-			defaultBool := strings.ToLower(defaultValue) == "true"
-			fs.BoolVar(v, flagName, defaultBool, usage)
-		} else {
-			val := &genericValue{field: field}
-			if defaultValue != "" {
-				val.Set(defaultValue)
-				usage += fmt.Sprintf(" (default: %s)", defaultValue)
-			}
-			fs.Var(val, flagName, usage)
-		}
-
-	case field.Kind() == reflect.Float64:
-		if v, ok := field.Addr().Interface().(*float64); ok {
-			defaultFloat, err := strconv.ParseFloat(defaultValue, 64)
-			if err != nil {
-				defaultFloat = 0
-			}
-			fs.Float64Var(v, flagName, defaultFloat, usage)
-		} else {
-			val := &genericValue{field: field}
-			if defaultValue != "" {
-				val.Set(defaultValue)
-				usage += fmt.Sprintf(" (default: %s)", defaultValue)
-			}
-			fs.Var(val, flagName, usage)
-		}
-
-	case field.Kind() == reflect.Uint:
-		if v, ok := field.Addr().Interface().(*uint); ok {
-			defaultUint, err := strconv.ParseUint(defaultValue, 10, 0)
-			if err != nil {
-				defaultUint = 0
-			}
-			fs.UintVar(v, flagName, uint(defaultUint), usage)
-		} else {
-			val := &genericValue{field: field}
-			if defaultValue != "" {
-				val.Set(defaultValue)
-				usage += fmt.Sprintf(" (default: %s)", defaultValue)
-			}
-			fs.Var(val, flagName, usage)
-		}
-
-	case field.Kind() == reflect.Uint64:
-		if v, ok := field.Addr().Interface().(*uint64); ok {
-			defaultUint64, err := strconv.ParseUint(defaultValue, 10, 64)
-			if err != nil {
-				defaultUint64 = 0
-			}
-			fs.Uint64Var(v, flagName, defaultUint64, usage)
-		} else {
-			val := &genericValue{field: field}
-			if defaultValue != "" {
-				val.Set(defaultValue)
-				usage += fmt.Sprintf(" (default: %s)", defaultValue)
-			}
-			fs.Var(val, flagName, usage)
-		}
-
-	default:
-		// 尝试使用 genericValue 处理其他类型（如 Int32, Float32 等）
-		val := &genericValue{field: field}
-		// 检查类型是否支持
-		if val.isSupported() {
-			if defaultValue != "" {
-				if err := val.Set(defaultValue); err != nil {
-					fmt.Printf("Warning: failed to set default value for %s: %v\n", flagName, err)
-				}
-				usage += fmt.Sprintf(" (default: %s)", defaultValue)
-			}
-			fs.Var(val, flagName, usage)
-		} else {
-			fmt.Printf("Warning: unsupported field type: %s (%s) for field %s\n", field.Kind(), field.Type(), flagName)
-		}
-	}
-}
-
-// autoRegisterWithPrefix 递归注册命令行参数，支持嵌套结构体和 embedding
-func (fs *Flags) autoRegisterWithPrefix(config any, envPrefix, flagPrefix string) {
-	v := reflect.ValueOf(config)
-	if v.Kind() != reflect.Ptr || v.Elem().Kind() != reflect.Struct {
-		logv.Warn().Msgf("config must be a pointer to a struct, got %T", config)
+// AutoRegister declares flag/env bindings without changing cfg. Defaults, files,
+// environment variables and explicit flags are applied together by Parse.
+func (f *Flags) AutoRegister(cfg any) {
+	root := reflect.ValueOf(cfg)
+	if root.Kind() != reflect.Pointer || root.IsNil() || root.Elem().Kind() != reflect.Struct {
+		f.registrationErr = fmt.Errorf("configuration must be a non-nil pointer to a struct")
 		return
 	}
+	f.configs = append(f.configs, cfg)
+	f.registerFields(root, root.Elem().Type(), nil, "", "", make(map[reflect.Type]bool))
+}
 
-	v = v.Elem()
-	t := v.Type()
-
-	for i := 0; i < v.NumField(); i++ {
-		field := v.Field(i)
-		fieldType := t.Field(i)
-
-		// 跳过未导出的字段
-		if !field.CanSet() {
+func (f *Flags) registerFields(root reflect.Value, typ reflect.Type, prefix []int, envPrefix, flagPrefix string, visiting map[reflect.Type]bool) {
+	if visiting[typ] {
+		return
+	}
+	visiting[typ] = true
+	defer delete(visiting, typ)
+	for i := 0; i < typ.NumField(); i++ {
+		meta := typ.Field(i)
+		if !meta.IsExported() {
 			continue
 		}
-
-		// 处理 embedding 结构体 (匿名字段)
-		if fieldType.Anonymous {
-			// 对于 embedding 结构体，直接递归处理，不改变前缀
-			if field.Kind() == reflect.Struct && field.Type() != reflect.TypeOf(time.Time{}) {
-				fs.autoRegisterWithPrefix(field.Addr().Interface(), envPrefix, flagPrefix)
-				continue
-			}
-			// 处理 embedding 指针结构体
-			if field.Kind() == reflect.Ptr && field.Type().Elem().Kind() == reflect.Struct {
-				if field.IsNil() {
-					field.Set(reflect.New(field.Type().Elem()))
-				}
-				fs.autoRegisterWithPrefix(field.Interface(), envPrefix, flagPrefix)
-				continue
-			}
-		}
-
-		// 获取 json tag 作为参数名
-		jsonTag := fieldType.Tag.Get("json")
-		if jsonTag == "" || jsonTag == "-" {
-			// 对于 embedding 结构体，如果没有 json tag，使用字段名
-			if fieldType.Anonymous {
-				// 对于匿名字段，可以考虑直接跳过或使用类型名
-				continue
-			}
-			continue // 如果没有 json tag 或者是空字符串，则跳过
-		} else if strings.Contains(jsonTag, ",") {
-			jsonTag = strings.Split(jsonTag, ",")[0]
-		}
-
-		// 构建环境变量键名和命令行参数名
-		envKey := buildEnvKey(envPrefix, jsonTag)
-		flagName := buildFlagName(flagPrefix, jsonTag)
-
-		// 处理普通嵌套结构体（非 embedding）
-		if field.Kind() == reflect.Struct && field.Type() != reflect.TypeOf(time.Time{}) && !fieldType.Anonymous {
-			fs.autoRegisterWithPrefix(field.Addr().Interface(), envKey, flagName)
+		tag := strings.Split(meta.Tag.Get("json"), ",")[0]
+		if tag == "-" {
 			continue
 		}
-
-		// 处理指向结构体的指针（非 embedding）
-		if field.Kind() == reflect.Ptr && field.Type().Elem().Kind() == reflect.Struct && !fieldType.Anonymous {
-			// 如果指针为nil，创建一个新的实例
-			if field.IsNil() {
-				field.Set(reflect.New(field.Type().Elem()))
+		index := append(append([]int(nil), prefix...), i)
+		if meta.Anonymous && configStruct(meta.Type) && tag == "" {
+			nested := meta.Type
+			if nested.Kind() == reflect.Pointer {
+				nested = nested.Elem()
 			}
-			fs.autoRegisterWithPrefix(field.Interface(), envKey, flagName)
+			f.registerFields(root, nested, index, envPrefix, flagPrefix, visiting)
 			continue
 		}
-
-		// 获取 default tag
-		defaultTag := fieldType.Tag.Get("default")
-
-		// 获取实际的默认值（优先使用环境变量）
-		defaultValue := getDefaultValue(field, envKey, defaultTag)
-
-		// 获取字段的描述信息（优先使用 description 标签）
-		usage := getFieldDescription(fieldType, flagName, envKey)
-
-		// 根据字段类型注册不同的参数类型
-		fs.registerValue(field, flagName, defaultValue, usage)
-
-		// 注册短标签参数
-		if shortTag := fieldType.Tag.Get("short"); shortTag != "" && shortTag != "h" {
-			shortUsage := getFieldDescription(fieldType, shortTag, envKey)
-			fs.registerValue(field, shortTag, defaultValue, shortUsage)
+		if tag == "" {
+			continue
+		}
+		envKey, flagName := buildEnvKey(envPrefix, tag), buildFlagName(flagPrefix, tag)
+		if configStruct(meta.Type) {
+			nested := meta.Type
+			if nested.Kind() == reflect.Pointer {
+				nested = nested.Elem()
+			}
+			f.registerFields(root, nested, index, envKey, flagName, visiting)
+			continue
+		}
+		value := &boundValue{root: root, path: index, typ: meta.Type, env: envKey, name: flagName, owner: f}
+		f.bindings = append(f.bindings, value)
+		usage := meta.Tag.Get("desc")
+		if usage == "" {
+			usage = "set " + flagName + " value"
+		}
+		usage += " (env: " + envKey + ")"
+		f.Var(value, flagName, usage)
+		if current := value.field(false); !current.IsValid() || current.IsZero() {
+			if fallback, ok := meta.Tag.Lookup("default"); ok {
+				f.Lookup(flagName).DefValue = fallback
+			}
+		}
+		if short := meta.Tag.Get("short"); short != "" && short != "h" {
+			f.Var(value, short, usage)
+			f.Lookup(short).DefValue = f.Lookup(flagName).DefValue
 		}
 	}
 }
 
-// loadDefaultComplexValue 加载复杂类型的默认值
-func loadDefaultComplexValue(field reflect.Value, defaultValue string) error {
-	// 首先尝试作为文件路径读取
-	if _, err := os.Stat(defaultValue); err == nil {
-		data, err := os.ReadFile(defaultValue)
-		if err != nil {
-			return err
-		}
-		newValue := reflect.New(field.Type()).Interface()
-		if err := json.Unmarshal(data, newValue); err != nil {
-			return err
-		}
-		field.Set(reflect.ValueOf(newValue).Elem())
-		return nil
-	}
-
-	// 如果不是文件，尝试直接解析为JSON
-	newValue := reflect.New(field.Type()).Interface()
-	if err := json.Unmarshal([]byte(defaultValue), newValue); err != nil {
-		return err
-	}
-	field.Set(reflect.ValueOf(newValue).Elem())
-	return nil
+type boundValue struct {
+	root      reflect.Value
+	path      []int
+	typ       reflect.Type
+	env, name string
+	owner     *Flags
 }
 
-// genericValue 通用反射值包装器，用于支持自定义类型的 flag 绑定
-type genericValue struct {
-	field reflect.Value
-}
-
-func (v *genericValue) String() string {
-	if !v.field.IsValid() {
+func (v *boundValue) field(create bool) reflect.Value { return fieldAt(v.root, v.path, create) }
+func (v *boundValue) String() string {
+	// flag.PrintDefaults calls String on a zero value of the flag.Value type.
+	if v == nil || !v.root.IsValid() {
 		return ""
 	}
-	if v.field.Kind() == reflect.String {
-		return v.field.String()
+	field := v.field(false)
+	if !field.IsValid() {
+		field = reflect.Zero(v.typ)
 	}
-	return fmt.Sprintf("%v", v.field.Interface())
+	if field.Kind() == reflect.String {
+		return field.String()
+	}
+	if field.CanInterface() {
+		if s, ok := field.Interface().(fmt.Stringer); ok {
+			return s.String()
+		}
+		if b, err := json.Marshal(field.Interface()); err == nil {
+			return string(b)
+		}
+	}
+	return ""
 }
-
-func (v *genericValue) Set(s string) error {
-	switch v.field.Kind() {
-	case reflect.String:
-		v.field.SetString(s)
-	case reflect.Bool:
-		b, err := strconv.ParseBool(s)
-		if err != nil {
-			return err
-		}
-		v.field.SetBool(b)
-	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
-		i, err := strconv.ParseInt(s, 0, 64)
-		if err != nil {
-			return err
-		}
-		v.field.SetInt(i)
-	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
-		u, err := strconv.ParseUint(s, 0, 64)
-		if err != nil {
-			return err
-		}
-		v.field.SetUint(u)
-	case reflect.Float32, reflect.Float64:
-		f, err := strconv.ParseFloat(s, 64)
-		if err != nil {
-			return err
-		}
-		v.field.SetFloat(f)
-	default:
-		return fmt.Errorf("unsupported kind %s", v.field.Kind())
+func (v *boundValue) IsBoolFlag() bool { return v.typ.Kind() == reflect.Bool }
+func (v *boundValue) Set(s string) error {
+	value, err := parseValue(v.typ, s)
+	if err != nil {
+		return fmt.Errorf("invalid %s value", v.typ)
+	}
+	if v.owner.collecting {
+		// Parse each argument once. Delay assignment until lower-priority layers are ready.
+		v.owner.explicit = append(v.owner.explicit, func() { v.field(true).Set(value) })
+	} else {
+		v.field(true).Set(value)
 	}
 	return nil
 }
 
-func (v *genericValue) IsBoolFlag() bool {
-	return v.field.Kind() == reflect.Bool
+type recordingValue struct {
+	flag.Value
+	target reflect.Value
+	owner  *Flags
 }
 
-func (v *genericValue) isSupported() bool {
-	switch v.field.Kind() {
-	case reflect.String, reflect.Bool,
-		reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
-		reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64,
-		reflect.Float32, reflect.Float64:
-		return true
+func (v *recordingValue) String() string {
+	if v == nil || v.Value == nil {
+		return ""
 	}
-	return false
+	return v.Value.String()
+}
+
+func (v *recordingValue) IsBoolFlag() bool {
+	value, ok := v.Value.(interface{ IsBoolFlag() bool })
+	return ok && value.IsBoolFlag()
+}
+
+func (v *recordingValue) Get() any {
+	if value, ok := v.Value.(flag.Getter); ok {
+		return value.Get()
+	}
+	return v.Value.String()
+}
+
+func (v *recordingValue) Set(s string) error {
+	if err := v.Value.Set(s); err != nil {
+		return err
+	}
+	if v.owner.collecting {
+		value := reflect.New(v.target.Type()).Elem()
+		value.Set(v.target)
+		v.owner.explicit = append(v.owner.explicit, func() { v.target.Set(value) })
+	}
+	return nil
+}
+
+// parseValue always decodes into an independent value, including slices/maps and
+// custom decoders, so a failure cannot partially overwrite a fallback.
+func parseValue(typ reflect.Type, raw string) (reflect.Value, error) {
+	value := reflect.New(typ).Elem()
+	if typ == reflect.TypeFor[time.Duration]() {
+		d, err := time.ParseDuration(raw)
+		if err != nil {
+			return value, err
+		}
+		value.SetInt(int64(d))
+		return value, nil
+	}
+	if typ == reflect.TypeFor[time.Time]() {
+		var result TimeValue
+		if err := result.Set(raw); err != nil {
+			return value, err
+		}
+		value.Set(reflect.ValueOf(time.Time(result)))
+		return value, nil
+	}
+	if decoder, ok := value.Addr().Interface().(encoding.TextUnmarshaler); ok {
+		return value, decoder.UnmarshalText([]byte(raw))
+	}
+	if typ.Kind() == reflect.Pointer {
+		child, err := parseValue(typ.Elem(), raw)
+		if err != nil {
+			return value, err
+		}
+		value.Set(reflect.New(typ.Elem()))
+		value.Elem().Set(child)
+		return value, nil
+	}
+	switch typ.Kind() {
+	case reflect.String:
+		value.SetString(raw)
+	case reflect.Bool:
+		b, err := strconv.ParseBool(raw)
+		if err != nil {
+			return value, err
+		}
+		value.SetBool(b)
+	case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
+		n, err := strconv.ParseInt(raw, 0, typ.Bits())
+		if err != nil {
+			return value, err
+		}
+		value.SetInt(n)
+	case reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
+		n, err := strconv.ParseUint(raw, 0, typ.Bits())
+		if err != nil {
+			return value, err
+		}
+		value.SetUint(n)
+	case reflect.Float32, reflect.Float64:
+		n, err := strconv.ParseFloat(raw, typ.Bits())
+		if err != nil {
+			return value, err
+		}
+		value.SetFloat(n)
+	default:
+		data := []byte(raw)
+		if !json.Valid(data) {
+			var err error
+			data, err = os.ReadFile(raw)
+			if err != nil {
+				return value, err
+			}
+		}
+		if err := json.Unmarshal(data, value.Addr().Interface()); err != nil {
+			return value, err
+		}
+	}
+	return value, nil
 }
