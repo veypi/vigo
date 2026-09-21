@@ -14,7 +14,6 @@ import (
 	"io"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 
 	"github.com/joho/godotenv"
@@ -100,30 +99,30 @@ func (a *app[T]) Exit() {
 	}
 }
 
+// runOptions vigo 运行时选项，经 flags.AutoRegister 注册：
+// flag 名来自 json tag（port 同时暴露 -p），env 为 tag 大写（HOST/PORT/...）。
+type runOptions struct {
+	Host        string `json:"host" default:"0.0.0.0" desc:"host address"`
+	Port        int    `json:"port" short:"p" default:"4000" desc:"listen port"`
+	LoggerLevel string `json:"logger_level" short:"l" default:"debug" desc:"logger level"`
+	LoggerPath  string `json:"logger_path" desc:"logger file path"`
+	LoggerMode  string `json:"logger_mode" default:"console" desc:"logger mode: console | nocolor | json"`
+}
+
 func (a *app[T]) Run() error {
 	godotenv.Load()
+	opts := &runOptions{}
 	cmdMain := flags.New(a.Name(), "")
-	host := cmdMain.String("host", flags.LoadEnvOr("HOST", "0.0.0.0"), "host address (env: HOST)")
-	port := cmdMain.Int("p", func() int {
-		if v := os.Getenv("PORT"); v != "" {
-			if i, err := strconv.Atoi(v); err == nil {
-				return i
-			}
-		}
-		return 4000
-	}(), "port (env: PORT)")
+	cmdMain.AutoRegister(opts, a.Config())
 	configFile := cmdMain.ConfigFileFlag("f", "./dev.yaml")
-	loggerLevel := cmdMain.String("l", "debug", "logger_level")
-	loggerPath := cmdMain.String("logger_path", "", "logger_path")
-	loggerMode := cmdMain.String("logger_mode", "console", "logger mode: console | nocolor | json")
 	cmdCfg := cmdMain.SubCommand("gen", "generate cfg file")
 	cmdCfg.Command = func() error {
 		return flags.DumpCfg(*configFile, a.Config())
 	}
 	cmdMain.Before = func() error {
-		logv.SetLevel(logv.AssertFuncErr(logv.ParseLevel(*loggerLevel)))
+		logv.SetLevel(logv.AssertFuncErr(logv.ParseLevel(opts.LoggerLevel)))
 		var writers []io.Writer
-		switch *loggerMode {
+		switch opts.LoggerMode {
 		case "nocolor":
 			writers = append(writers, logv.ConsoleWriterNoColor())
 		case "json":
@@ -131,14 +130,13 @@ func (a *app[T]) Run() error {
 		default:
 			writers = append(writers, logv.ConsoleWriter())
 		}
-		if loggerPath != nil && *loggerPath != "" {
-			logv.FileHook.Filename = *loggerPath
+		if opts.LoggerPath != "" {
+			logv.FileHook.Filename = opts.LoggerPath
 			writers = append(writers, &logv.FileHook)
 		}
 		logv.SetLogger(logv.NewLogger(writers...))
 		return nil
 	}
-	cmdMain.AutoRegister(a.Config())
 	cmdMain.Command = func() error {
 		err := a.Init()
 		if err != nil {
@@ -146,7 +144,7 @@ func (a *app[T]) Run() error {
 		}
 		defer a.Exit()
 		event.Start()
-		server, err := NewServer(WithHost(*host), WithPort(*port))
+		server, err := NewServer(WithHost(opts.Host), WithPort(opts.Port))
 		if err != nil {
 			return err
 		}

@@ -12,13 +12,6 @@ import (
 	"time"
 )
 
-func LoadEnvOr(key, defaultValue string) string {
-	if value, ok := os.LookupEnv(key); ok {
-		return value
-	}
-	return defaultValue
-}
-
 func buildEnvKey(prefix, name string) string {
 	if prefix == "" {
 		return strings.ToUpper(name)
@@ -114,14 +107,18 @@ func (f *FileValue) Set(filePath string) error {
 
 // AutoRegister declares flag/env bindings without changing cfg. Defaults, files,
 // environment variables and explicit flags are applied together by Parse.
-func (f *Flags) AutoRegister(cfg any) {
-	root := reflect.ValueOf(cfg)
-	if root.Kind() != reflect.Pointer || root.IsNil() || root.Elem().Kind() != reflect.Struct {
-		f.registrationErr = fmt.Errorf("configuration must be a non-nil pointer to a struct")
-		return
+// Multiple structs may be registered in one call, e.g. a shared configuration
+// plus command-specific options.
+func (f *Flags) AutoRegister(cfgs ...any) {
+	for _, cfg := range cfgs {
+		root := reflect.ValueOf(cfg)
+		if root.Kind() != reflect.Pointer || root.IsNil() || root.Elem().Kind() != reflect.Struct {
+			f.registrationErr = fmt.Errorf("configuration must be a non-nil pointer to a struct")
+			return
+		}
+		f.configs = append(f.configs, cfg)
+		f.registerFields(root, root.Elem().Type(), nil, "", "", make(map[reflect.Type]bool))
 	}
-	f.configs = append(f.configs, cfg)
-	f.registerFields(root, root.Elem().Type(), nil, "", "", make(map[reflect.Type]bool))
 }
 
 func (f *Flags) registerFields(root reflect.Value, typ reflect.Type, prefix []int, envPrefix, flagPrefix string, visiting map[reflect.Type]bool) {

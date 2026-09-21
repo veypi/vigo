@@ -152,6 +152,30 @@ func (f *Flags) ParseArgs(arguments []string) error {
 	return nil
 }
 
+// inheritParentFlags re-exposes flags registered on ancestor commands, so a flag
+// stays valid anywhere after the subcommand path. Configuration flags are cloned
+// with this command as owner, keeping explicit values inside the normal layer
+// priority; other flags are shared by reference. A locally registered flag
+// shadows the inherited one.
+func (f *Flags) inheritParentFlags() {
+	for p := f.parent; p != nil; p = p.parent {
+		p.FlagSet.VisitAll(func(option *flag.Flag) {
+			if f.Lookup(option.Name) != nil {
+				return
+			}
+			source, ok := option.Value.(*boundValue)
+			if !ok {
+				f.Var(option.Value, option.Name, option.Usage)
+				return
+			}
+			clone := &boundValue{root: source.root, path: source.path, typ: source.typ, env: source.env, name: source.name, owner: f}
+			f.bindings = append(f.bindings, clone)
+			f.Var(clone, option.Name, option.Usage)
+			f.Lookup(option.Name).DefValue = option.DefValue
+		})
+	}
+}
+
 func (f *Flags) str() string {
 	if f.parent == nil {
 		return f.Name()
@@ -200,6 +224,7 @@ func (f *Flags) selectCommand(arguments []string, chain *[]*Flags) (*Flags, erro
 		return nil, f.registrationErr
 	}
 	*chain = append(*chain, f)
+	f.inheritParentFlags()
 	f.FlagSet.Usage = f.Usage
 	// Manual scalar flags may alias a registered config field. Record their typed
 	// assignments in argument order, including mixed manual/AutoRegister aliases.
