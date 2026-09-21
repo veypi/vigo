@@ -444,6 +444,11 @@ func handleGet(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 
 	if rs, ok := file.(io.ReadSeeker); ok {
 		etag := getETag(p, stat, options.ETagCache)
+		// Explicit non-directory marker (mirrors handleHead). Set before the 304
+		// branch: a HEAD stat revalidating a cached GET entry merges 304 headers
+		// into the stored response (RFC 7234 §4.3.5), so the marker must ride
+		// every variant or the cached entry stays markerless for HEAD clients.
+		x.Header().Set("X-UFS-Dir", "false")
 		if checkNotModified(x.Request, etag, stat.ModTime()) {
 			x.WriteHeader(http.StatusNotModified)
 			return
@@ -516,14 +521,15 @@ func handleHead(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 
 	if rs, ok := file.(io.ReadSeeker); ok {
 		etag := getETag(p, stat, options.ETagCache)
+		// Explicit non-directory marker: lets HEAD clients distinguish a regular
+		// file from a directory without relying on Content-Type heuristics
+		// (e.g. a .json file also yields application/json). Set before the 304
+		// branch so revalidations keep refreshing cached entries with it.
+		x.Header().Set("X-UFS-Dir", "false")
 		if checkNotModified(x.Request, etag, stat.ModTime()) {
 			x.WriteHeader(http.StatusNotModified)
 			return
 		}
-		// Explicit non-directory marker: lets HEAD clients distinguish a regular
-		// file from a directory without relying on Content-Type heuristics
-		// (e.g. a .json file also yields application/json).
-		x.Header().Set("X-UFS-Dir", "false")
 		setCacheHeaders(x.ResponseWriter(), etag, stat.ModTime(), options.CacheControl)
 		http.ServeContent(x.ResponseWriter(), x.Request, stat.Name(), stat.ModTime(), rs)
 		return
@@ -828,6 +834,9 @@ func serveDirList(x *vigo.X, filesystem fs.FS, p string, stat fs.FileInfo, depth
 		x.WriteHeader(http.StatusInternalServerError)
 		return
 	}
+	// Explicit directory marker (mirrors serveDirListHead): cached dir listings
+	// must carry it for the same HEAD-stat revalidation reason as files.
+	x.Header().Set("X-UFS-Dir", "true")
 	x.JSON(entry)
 }
 
