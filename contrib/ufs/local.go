@@ -217,6 +217,9 @@ func (f *localFS) Search(path, glob, pattern string, limit int, ignoreCase bool)
 	return Search(f, path, glob, pattern, limit, ignoreCase)
 }
 
+// WriteFile 原子替换写入：同目录暂存 → fsync → rename（暂存提交模式参考
+// aic-pod hostfs write）。读者只会观察到替换前或替换后的完整内容，不会读到
+// 半截；已存在常规文件保留其权限位，新文件按 perm 创建，失败清理暂存。
 func (f *localFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	name, err := validatePath(name, "write")
 	if err != nil {
@@ -229,5 +232,35 @@ func (f *localFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return fsErr(err, "write", name)
 	}
-	return fsErr(os.WriteFile(path, data, perm), "write", name)
+	mode := perm
+	if fi, statErr := os.Lstat(path); statErr == nil {
+		if fi.Mode().IsRegular() {
+			mode = fi.Mode().Perm()
+		}
+	} else if !errors.Is(statErr, fs.ErrNotExist) {
+		return fsErr(statErr, "write", name)
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".ufs-tmp-")
+	if err != nil {
+		return fsErr(err, "write", name)
+	}
+	tmpName := tmp.Name()
+	_, err = tmp.Write(data)
+	if err == nil {
+		err = tmp.Chmod(mode)
+	}
+	if err == nil {
+		err = tmp.Sync()
+	}
+	if closeErr := tmp.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil {
+		err = os.Rename(tmpName, path)
+	}
+	if err != nil {
+		_ = os.Remove(tmpName)
+		return fsErr(err, "write", name)
+	}
+	return nil
 }

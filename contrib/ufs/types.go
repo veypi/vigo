@@ -37,7 +37,10 @@ type FS interface {
 	RemoveAll(path string) error
 	// Rename renames (moves) oldname to newname.
 	Rename(oldname, newname string) error
-	// WriteFile writes data to the named file, creating it if necessary.
+	// WriteFile atomically replaces the named file's content, creating it if
+	// necessary: readers observe either the old or the new content, never a
+	// partial write. Existing file permissions are preserved; perm applies to
+	// newly created files.
 	WriteFile(name string, data []byte, perm fs.FileMode) error
 }
 
