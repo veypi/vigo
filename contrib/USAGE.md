@@ -228,7 +228,8 @@ multiFS := ufs.NewMultiFS(
 // HTTP Handler (支持 ETag/Last-Modified/304 缓存)
 handler := ufs.NewHandler(multiFS)
 
-// SPA 回退 (浏览器请求非文件路径时自动返回 index.html)
+// SPA 回退 (浏览器导航的目录/缺失路径返回壳；raw 请求仍目录 JSON/404，
+// 文件任意客户端直出——同一 URL 可同址做页面 + 数据 API)
 handler := ufs.NewHandler(embedFS,
     ufs.WithSpa("index.html", nil), // content=nil 表示从 FS 读取文件
 )

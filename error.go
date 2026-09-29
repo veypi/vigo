@@ -19,13 +19,18 @@ var (
 	ErrInvalidArg = NewError("invalid arg").WithCode(40001)
 	ErrMissingArg = NewError("missing arg").WithCode(40002)
 	ErrArgFormat  = NewError("arg format error").WithCode(40003)
+	ErrFeatureDisabled = NewError("feature disabled").WithCode(40010) // 功能未启用（服务/能力被平台配置关闭）
+	ErrCapabilityNotSupported = NewError("capability not supported").WithCode(40020) // 模型/端点不支持该能力
 
 	// 401xx 认证授权相关错误
-	ErrUnauthorized = NewError("unauthorized").WithCode(40100)  // 未登录/无token
-	ErrTokenInvalid = NewError("token invalid").WithCode(40101) // token无效
-	ErrTokenExpired = NewError("token expired").WithCode(40102) // token过期
-	ErrNoPermission = NewError("no permission").WithCode(40103) // 无操作权限
-	ErrForbidden    = NewError("forbidden").WithCode(40300)     // 禁止访问
+	ErrUnauthorized       = NewError("unauthorized").WithCode(40100)         // 未登录/无token
+	ErrTokenInvalid       = NewError("token invalid").WithCode(40101)        // token无效
+	ErrTokenExpired       = NewError("token expired").WithCode(40102)        // token过期
+	ErrInvalidCredentials = NewError("invalid credentials").WithCode(40104) // 用户名/密码等凭据错误
+	ErrUserDisabled       = NewError("user disabled").WithCode(40105)        // 用户被禁用
+	ErrInvalidCode        = NewError("invalid or expired code").WithCode(40110) // 验证码/授权码无效或过期
+	ErrNoPermission       = NewError("no permission").WithCode(40300)        // 无操作权限（授权域，与 ErrForbidden 同码）
+	ErrForbidden          = NewError("forbidden").WithCode(40300)            // 禁止访问
 
 	// 404xx 资源不存在
 	ErrNotFound         = NewError("not found").WithCode(40400)

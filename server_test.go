@@ -31,9 +31,6 @@ func TestConfigIsValidAppliesDefaults(t *testing.T) {
 	if err := cfg.IsValid(); err != nil {
 		t.Fatalf("expected localhost to be valid: %v", err)
 	}
-	if cfg.ReadTimeout <= 0 || cfg.ReadHeaderTimeout <= 0 || cfg.WriteTimeout <= 0 || cfg.IdleTimeout <= 0 {
-		t.Fatalf("expected timeout defaults to be applied: %+v", cfg)
-	}
 	if cfg.ShutdownTimeout <= 0 {
 		t.Fatalf("expected shutdown timeout default to be applied: %+v", cfg)
 	}

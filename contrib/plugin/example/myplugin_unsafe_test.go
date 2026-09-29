@@ -20,7 +20,7 @@ var Router = vigo.NewRouter()
 func init() {
 	Router.Get("/unsafe", func(x *vigo.X) error {
 		// Let's try to call vigo.New() which is forbidden by default loader
-		_, _ = vigo.New()
+		_ = vigo.New("x", vigo.NewRouter(), struct{}{})
 		
 		return x.JSON(fmt.Sprintf("Unsafe check"))
 	})

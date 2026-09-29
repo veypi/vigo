@@ -16,6 +16,9 @@ Vigo 是一个高性能、简洁易用的 Go Web 框架，专为构建现代 RES
 
 ## 📦 安装
 
+配置文件、环境变量和命令行参数统一由 [flags](flags/README.md) 管理，
+优先级为 **命令行 > 环境变量 > 配置文件 > 默认值**，支持配置文件逐字段容错。
+
 ```bash
 go mod init your-project
 go get github.com/veypi/vigo
@@ -258,6 +261,17 @@ func CreateUser(x *vigo.X, req *UserReq) (*UserResp, error) {
 
 // 注册路由
 router.Post("/users", CreateUser)
+```
+
+#### 3.3 响应压缩（contrib/compress）
+
+`contrib/compress` 提供开箱即用的 gzip 响应压缩中间件：仅在客户端声明 `Accept-Encoding: gzip` 且响应类型可压缩时生效，自动跳过已编码响应、Range 请求、协议升级（WebSocket）、HEAD 请求、二进制类型、已知过小响应体与无体状态码（1xx/204/205/304/206）。
+
+```go
+import "github.com/veypi/vigo/contrib/compress"
+
+router.Use(compress.New().Handler)
+// 可选：compress.New(compress.WithMinSize(2048), compress.WithLevel(gzip.BestSpeed))
 ```
 
 ### 4. 控制流

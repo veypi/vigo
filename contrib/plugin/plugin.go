@@ -1,6 +1,7 @@
 package plugin
 
 import (
+	"encoding/json"
 	"fmt"
 	"go/ast"
 	"go/parser"
@@ -53,7 +54,7 @@ func NewLoader() *Loader {
 			"github.com/veypi/vigo/contrib",
 		},
 		ForbiddenSelectors: map[string][]string{
-			"gorm.io/gorm":            {"Open", "OpenDB"},
+			"gorm.io/gorm":          {"Open", "OpenDB"},
 			"github.com/veypi/vigo": {"New"},
 		},
 		AllowImportAlias: false,
@@ -207,6 +208,13 @@ func (l *Loader) compile(buildDir, srcPath string) (string, error) {
 		return "", err
 	}
 
+	// 对齐插件模块依赖版本到主模块上下文：go.work workspace 会提升依赖版本
+	// （如 google/uuid v1.3.0 → v1.6.0），而插件独立 tidy 只按主 go.mod 最低约束
+	// 解析，版本不一致会导致 plugin.Open 报 "built with a different version"。
+	if err := l.alignDependencyVersions(buildDir, l.mainContext(buildDir)); err != nil {
+		return "", err
+	}
+
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return "", fmt.Errorf("build error: %s, output: %s", err, output)
 	}
@@ -357,6 +365,103 @@ func (l *Loader) autoGenerateGoMod(dir string) error {
 		return fmt.Errorf("go mod tidy failed: %s", out)
 	}
 
+	return nil
+}
+
+// mainContext 返回依赖版本对齐用的主模块上下文目录：
+// 优先 buildDir 向上命中的 go.work 所在目录，其次 LocalDeps 中第一个存在的目录。
+func (l *Loader) mainContext(buildDir string) string {
+	if dir := findUpFile(buildDir, "go.work"); dir != "" {
+		return dir
+	}
+	for _, p := range l.LocalDeps {
+		if st, err := os.Stat(p); err == nil && st.IsDir() {
+			return p
+		}
+	}
+	return ""
+}
+
+func findUpFile(startDir, name string) string {
+	dir := startDir
+	for {
+		if _, err := os.Stat(filepath.Join(dir, name)); err == nil {
+			return dir
+		}
+		parent := filepath.Dir(dir)
+		if parent == dir {
+			return ""
+		}
+		dir = parent
+	}
+}
+
+// alignDependencyVersions 让插件模块 go.mod 的依赖版本与主模块上下文保持一致。
+// go.work workspace 模式下 MVS 会提升依赖版本（如 google/uuid v1.3.0 → v1.6.0），
+// 而插件在临时目录独立构建，tidy 只按主 go.mod 的最低约束解析出旧版本，
+// 插件 .so 与主进程共享包版本不一致会导致 plugin.Open 报
+// "plugin was built with a different version of package ..."。
+// 显式 require 是硬约束，go mod tidy 不会降级，因此对齐后构建结果稳定。
+func (l *Loader) alignDependencyVersions(buildDir, ctxDir string) error {
+	if ctxDir == "" {
+		return nil
+	}
+
+	cmd := exec.Command("go", "mod", "edit", "-json")
+	cmd.Dir = buildDir
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("go mod edit -json failed: %s", out)
+	}
+	var mod struct {
+		Require []struct {
+			Path    string `json:"Path"`
+			Version string `json:"Version"`
+		} `json:"Require"`
+		Replace []struct {
+			Path string `json:"Path"`
+		} `json:"Replace"`
+	}
+	if err := json.Unmarshal(out, &mod); err != nil {
+		return fmt.Errorf("parse go.mod failed: %w", err)
+	}
+
+	replaced := make(map[string]bool, len(mod.Replace))
+	for _, r := range mod.Replace {
+		replaced[r.Path] = true
+	}
+
+	changed := false
+	for _, req := range mod.Require {
+		if replaced[req.Path] {
+			continue // replace 到本地的模块（如 vigo）不参与远程版本对齐
+		}
+		cmd := exec.Command("go", "list", "-m", "-f", "{{.Version}}", req.Path)
+		cmd.Dir = ctxDir
+		ver, err := cmd.Output()
+		if err != nil {
+			continue // 插件独有依赖不在主依赖图，保持 tidy 结果
+		}
+		v := strings.TrimSpace(string(ver))
+		if v == "" || v == req.Version {
+			continue
+		}
+		cmd = exec.Command("go", "mod", "edit", "-require="+req.Path+"@"+v)
+		cmd.Dir = buildDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("align %s@%s failed: %s", req.Path, v, out)
+		}
+		changed = true
+	}
+
+	if changed {
+		// 补全新版本的 go.sum 条目。显式 require 是硬约束，tidy 不会降级版本。
+		cmd := exec.Command("go", "mod", "tidy")
+		cmd.Dir = buildDir
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return fmt.Errorf("go mod tidy after align failed: %s", out)
+		}
+	}
 	return nil
 }
 

@@ -37,6 +37,7 @@ type Config struct {
 	MaxHeaderBytes    int           `json:"max_header_bytes,omitempty"`
 	RequestIDHeader   string        `json:"request_id_header,omitempty"`
 	DisableReqLog     bool          `json:"disable_req_log,omitempty"`
+	listener          net.Listener  // 注入的监听器（WithListener，随机端口场景）
 }
 
 func (c *Config) Url() string {
@@ -165,5 +166,13 @@ func WithMaxHeaderBytes(size int) func(*Config) {
 func WithRequestIDHeader(header string) func(*Config) {
 	return func(c *Config) {
 		c.RequestIDHeader = header
+	}
+}
+
+// WithListener 注入已建立的监听器（如 net.Listen("tcp", "127.0.0.1:0") 随机端口场景）。
+// 注入后 Host/Port 仅作展示，端口校验跳过，实际监听地址以 listener 为准（见 Addr）。
+func WithListener(l net.Listener) func(*Config) {
+	return func(c *Config) {
+		c.listener = l
 	}
 }

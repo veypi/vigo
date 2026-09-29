@@ -7,6 +7,7 @@ package common
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
@@ -42,7 +43,9 @@ func JsonResponse(x *vigo.X, data any) error {
 
 func JsonErrorResponse(x *vigo.X, err error) error {
 	code := 400
-	if e, ok := err.(*vigo.Error); ok {
+	var e *vigo.Error
+	// errors.As 解开 fmt.Errorf 等包装链，避免包装后丢失 vigo.Error 的 code
+	if errors.As(err, &e) {
 		code = e.Code
 		if code > 999 {
 			code, _ = strconv.Atoi(strconv.Itoa(code)[:3])

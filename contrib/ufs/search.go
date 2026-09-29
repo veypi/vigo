@@ -51,18 +51,18 @@ func matchGlob(pattern, name string) bool {
 // skipDirs lists directory names that Grep should not descend into.
 // Directories starting with "." are also skipped regardless of this list.
 var skipDirs = map[string]bool{
-	"node_modules":      true,
-	"vendor":            true,
-	"__pycache__":       true,
-	"bower_components":  true,
-	"dist":              true,
-	"build":             true,
-	"target":            true,
-	".next":             true,
-	".nuxt":             true,
-	"coverage":          true,
-	".turbo":            true,
-	".output":           true,
+	"node_modules":     true,
+	"vendor":           true,
+	"__pycache__":      true,
+	"bower_components": true,
+	"dist":             true,
+	"build":            true,
+	"target":           true,
+	".next":            true,
+	".nuxt":            true,
+	"coverage":         true,
+	".turbo":           true,
+	".output":          true,
 }
 
 // Search walks the filesystem from searchPath and returns matching files or content.
@@ -76,6 +76,11 @@ var skipDirs = map[string]bool{
 // Results are sorted by modification time descending. In grep mode, within the same file
 // results are sorted by line number ascending.
 func Search(fsys fs.FS, searchPath, glob, pattern string, limit int, ignoreCase bool) ([]SearchMatch, error) {
+	return SearchDepth(fsys, searchPath, glob, pattern, limit, ignoreCase, 0)
+}
+
+// SearchDepth prunes directories before reading them; direct files are depth 1.
+func SearchDepth(fsys fs.FS, searchPath, glob, pattern string, limit int, ignoreCase bool, maxDepth int) ([]SearchMatch, error) {
 	searchPath, err := validatePath(searchPath, "search")
 	if err != nil {
 		return nil, err
@@ -118,6 +123,9 @@ func Search(fsys fs.FS, searchPath, glob, pattern string, limit int, ignoreCase 
 			return nil
 		}
 		if d.IsDir() {
+			if maxDepth > 0 && p != searchPath && strings.Count(relPath(searchPath, p), "/")+1 >= maxDepth {
+				return fs.SkipDir
+			}
 			if isGrep && skipDirs[d.Name()] {
 				return fs.SkipDir
 			}

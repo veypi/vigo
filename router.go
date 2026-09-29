@@ -77,13 +77,18 @@ const (
 	nodeStatic   nodeType = iota // /a
 	nodeParam                    // {param}
 	nodeWildcard                 // * or {path:*}
-	nodeCatchAll                 // **
+	nodeCatchAll                 // ** 或 {path:*}（零段可匹配）/ {path:+}（至少一段）
 	nodeRegex                    // {name:[a-z]+} or {a}.{b}
 )
 
 type route struct {
 	kind     nodeType
 	fragment string // raw fragment
+
+	// allowEmpty（仅 nodeCatchAll）：true = 零段尾可匹配（** / {path:*}，
+	// 历史语义，/x 与 /x/ 等价）；false = 至少一段（{path:+}，空尾不命中，
+	// 请求可回落到路由表后续节点——如 SPA fallback）。
+	allowEmpty bool
 
 	// For Regex/Composite nodes
 	regex     *regexp.Regexp
@@ -173,8 +178,8 @@ func (r *route) match(path string, start int, method string, x *X) (*route, []an
 		}
 		// Try to find a child that matches empty? (e.g. optional params? not supported yet, or CatchAll)
 		for _, child := range r.children {
-			if child.kind == nodeCatchAll {
-				// ** matches empty? usually yes
+			if child.kind == nodeCatchAll && child.allowEmpty {
+				// ** / {path:*} 匹配空尾（历史语义）；{path:+} 跳过
 				stackLen := len(x.PathParams)
 				if child.paramName != "" {
 					x.PathParams = append(x.PathParams, Param{child.paramName, ""})
@@ -223,7 +228,11 @@ func (r *route) match(path string, start int, method string, x *X) (*route, []an
 				x.PathParams = append(x.PathParams, Param{child.paramName, seg})
 			}
 		case nodeCatchAll:
-			// ** matches all remaining segments
+			// ** / {path:*} 匹配全部剩余段；{path:+} 余下无非空段时不命中
+			//（空尾回落后续路由，如 SPA fallback）。
+			if !child.allowEmpty && strings.Trim(path[start:], "/") == "" {
+				break
+			}
 			matched = true
 			nextStart = len(path)
 			if child.paramName != "" {
@@ -299,33 +308,40 @@ func (r *route) ServeHTTP(w http.ResponseWriter, req *http.Request) {
 	}
 }
 
-// parsing logic
-func parseSegment(seg string) (nodeType, string, *regexp.Regexp, []string) {
+// parsing logic。返回 allowEmpty：仅 catchall 有意义——{path:*}/`**` 零段
+// 可匹配（历史语义），{path:+} 至少一段（空尾不命中，回落后续节点）。
+func parseSegment(seg string) (nodeType, string, *regexp.Regexp, []string, bool) {
 	if seg == "**" {
-		return nodeCatchAll, "", nil, nil
+		return nodeCatchAll, "", nil, nil, true
 	}
 	if seg == "*" {
-		return nodeWildcard, "", nil, nil
+		return nodeWildcard, "", nil, nil, false
 	}
 
 	// Check for {param} or regex
 	// If no { and no *, it's static
 	if !strings.ContainsAny(seg, "{*") {
-		return nodeStatic, "", nil, nil
+		return nodeStatic, "", nil, nil, false
 	}
 
 	// Complex parsing
-	// {filepath:*} -> CatchAll with name "filepath"
+	// {filepath:*} -> CatchAll with name "filepath"（零段可匹配）
 	if strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, ":*}") {
 		name := seg[1 : len(seg)-3]
-		return nodeCatchAll, name, nil, nil
+		return nodeCatchAll, name, nil, nil, true
+	}
+
+	// {filepath:+} -> CatchAll with name "filepath"（至少一段，空尾不命中）
+	if strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, ":+}") {
+		name := seg[1 : len(seg)-3]
+		return nodeCatchAll, name, nil, nil, false
 	}
 
 	// {name} -> Param
 	if strings.HasPrefix(seg, "{") && strings.HasSuffix(seg, "}") && strings.Count(seg, "{") == 1 {
 		inner := seg[1 : len(seg)-1]
 		if !strings.Contains(inner, ":") {
-			return nodeParam, inner, nil, nil
+			return nodeParam, inner, nil, nil, false
 		}
 	}
 
@@ -398,10 +414,10 @@ func parseSegment(seg string) (nodeType, string, *regexp.Regexp, []string) {
 	re, err := regexp.Compile(reStr)
 	if err != nil {
 		logv.Error().Msgf("Invalid route regex: %s, %v", seg, err)
-		return nodeStatic, "", nil, nil // Fallback
+		return nodeStatic, "", nil, nil, false // Fallback
 	}
 
-	return nodeRegex, "", re, paramKeys
+	return nodeRegex, "", re, paramKeys, false
 }
 
 func (r *route) get_subrouter(path string) *route {
@@ -421,7 +437,7 @@ func (r *route) get_subrouter(path string) *route {
 
 	for _, seg := range segments {
 		// Parse segment type
-		kind, pName, re, keys := parseSegment(seg)
+		kind, pName, re, keys, allowEmpty := parseSegment(seg)
 
 		// Find matching child (Exact match for existing node logic?)
 		// We need to find if we already have an equivalent node.
@@ -435,14 +451,15 @@ func (r *route) get_subrouter(path string) *route {
 
 		if next == nil {
 			next = &route{
-				kind:      kind,
-				fragment:  seg,
-				paramName: pName,
-				regex:     re,
-				paramKeys: keys,
-				children:  make([]*route, 0),
-				parent:    current,
-				methods:   make(map[string]*RouteHandler),
+				kind:       kind,
+				fragment:   seg,
+				paramName:  pName,
+				regex:      re,
+				paramKeys:  keys,
+				allowEmpty: allowEmpty,
+				children:   make([]*route, 0),
+				parent:     current,
+				methods:    make(map[string]*RouteHandler),
 			}
 			current.children = append(current.children, next)
 

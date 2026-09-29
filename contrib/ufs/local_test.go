@@ -5,6 +5,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -127,5 +128,118 @@ func TestLocalFSSymlinkSearch(t *testing.T) {
 		if m.Path == "leak" {
 			t.Errorf("Search 穿透 symlink 泄露根外内容: %+v", m)
 		}
+	}
+}
+
+// TestValidatePathSegmentLength 单段名称长度硬校验：≤64 放行、>64 拒绝（读写同规则），
+// 错误同时满足 errors.Is(fs.ErrInvalid) 与 errors.Is(ErrNameTooLong)。
+func TestValidatePathSegmentLength(t *testing.T) {
+	lfs, _ := newLocalTestFS(t)
+	seg64 := strings.Repeat("a", MaxNameSegmentLen)
+	seg65 := strings.Repeat("b", MaxNameSegmentLen+1)
+	long := func(base string) string { return "dir/" + base }
+
+	// 边界：64 字节单段读写均放行。
+	if err := lfs.WriteFile(long(seg64), []byte("x"), 0o644); err != nil {
+		t.Fatalf("WriteFile(64-byte segment) err = %v; want nil", err)
+	}
+	if _, err := lfs.ReadFile(long(seg64)); err != nil {
+		t.Fatalf("ReadFile(64-byte segment) err = %v; want nil", err)
+	}
+
+	// 超限：65 字节单段读写均拒绝，且多段路径只拦超长段。
+	for _, op := range []struct {
+		name string
+		run  func(path string) error
+	}{
+		{"ReadFile", func(p string) error { _, err := lfs.ReadFile(p); return err }},
+		{"WriteFile", func(p string) error { return lfs.WriteFile(p, []byte("x"), 0o644) }},
+		{"Stat", func(p string) error { _, err := lfs.Stat(p); return err }},
+		{"RemoveAll", func(p string) error { return lfs.RemoveAll(p) }},
+	} {
+		for _, path := range []string{long(seg65), seg65 + "/ok.txt"} {
+			err := op.run(path)
+			if err == nil {
+				t.Errorf("%s(%q) err = nil; want segment-length rejection", op.name, path)
+				continue
+			}
+			if !errors.Is(err, fs.ErrInvalid) || !errors.Is(err, ErrNameTooLong) {
+				t.Errorf("%s(%q) err = %v; want Is(fs.ErrInvalid)+Is(ErrNameTooLong)", op.name, path, err)
+			}
+		}
+	}
+
+	// 根目录（"."）与常规路径不受影响。
+	if _, err := lfs.Stat("."); err != nil {
+		t.Errorf("Stat(root) err = %v; want nil", err)
+	}
+	if err := lfs.WriteFile("a/b/c.txt", []byte("x"), 0o644); err != nil {
+		t.Errorf("WriteFile(a/b/c.txt) err = %v; want nil", err)
+	}
+}
+
+// TestLocalFSWriteFileAtomic 原子替换写语义：覆盖正确、既有权限保留、新文件
+// 用 perm、空内容可写、失败（目标为目录）报错，且成功/失败路径均无暂存残留。
+func TestLocalFSWriteFileAtomic(t *testing.T) {
+	lfs, root := newLocalTestFS(t)
+
+	// 覆盖写：内容整体替换。
+	if err := lfs.WriteFile("a.txt", []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := lfs.WriteFile("a.txt", []byte("v2-longer-content"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := lfs.ReadFile("a.txt"); err != nil || string(data) != "v2-longer-content" {
+		t.Fatalf("overwrite = %q, %v", data, err)
+	}
+
+	// 既有权限保留：chmod 0640 后覆盖写，权限不变。
+	if err := os.Chmod(filepath.Join(root, "a.txt"), 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := lfs.WriteFile("a.txt", []byte("v3"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(filepath.Join(root, "a.txt")); err != nil || fi.Mode().Perm() != 0o640 {
+		t.Fatalf("existing mode must be preserved: %v", err)
+	}
+
+	// 新文件按 perm 创建。
+	if err := lfs.WriteFile("b.txt", []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(filepath.Join(root, "b.txt")); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("new file mode: %v", err)
+	}
+
+	// 空内容写入。
+	if err := lfs.WriteFile("empty.txt", nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := lfs.ReadFile("empty.txt"); err != nil || len(data) != 0 {
+		t.Fatalf("empty write = %q, %v", data, err)
+	}
+
+	// 目标为目录：报错且不残留暂存。
+	if err := os.MkdirAll(filepath.Join(root, "dir"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := lfs.WriteFile("dir", []byte("x"), 0o644); err == nil {
+		t.Fatal("writing over a directory must fail")
+	}
+
+	// 全树无 .ufs-tmp-* 残留。
+	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if strings.HasPrefix(d.Name(), ".ufs-tmp-") {
+			t.Errorf("staging residue: %s", p)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }

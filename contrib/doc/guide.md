@@ -29,7 +29,7 @@ GET {{.PREFIX}}/?depth=5
 |------|------|
 | depth | 最大递归深度，默认 1 |
 
-返回 `ItemEntry` 树形结构，包含文件名、类型、大小、子项。
+返回 `ItemEntry` 树形结构，包含文件名、类型、大小、子项；git 仓库根目录额外带 `is_repo` 与 `branch`（读 `.git/HEAD` 解析，detached HEAD 时无 branch）。
 
 ### 文件内容
 

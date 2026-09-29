@@ -155,6 +155,15 @@ func (r *Redis) Client() *redis.Client {
 			if err != nil {
 				panic(err)
 			}
+			// miniredis 的 TTL 过期只在 FastForward（时间机器）推进时触发，
+			// 真实时间流逝不会过期 —— 后台 goroutine 把真实时间映射到 miniredis 时钟。
+			go func() {
+				ticker := time.NewTicker(100 * time.Millisecond)
+				defer ticker.Stop()
+				for range ticker.C {
+					mr.FastForward(100 * time.Millisecond)
+				}
+			}()
 			r.client = redis.NewClient(&redis.Options{
 				Addr: mr.Addr(),
 			})

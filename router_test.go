@@ -239,6 +239,45 @@ func TestRouter_Params(t *testing.T) {
 	checkResponse(t, w, "file:css/style.css")
 }
 
+// TestRouter_Params 补充 {path:+} 非空 catchall 变体：至少一段——/plus、
+// /plus/（空尾）不命中回落 404（生产环境由后续 SPA fallback 接住），
+// /plus/a、/plus/a/b 命中；{path:*} 零段匹配历史语义不变。
+func TestRouter_CatchAllNonEmpty(t *testing.T) {
+	r := NewRouter()
+	r.Get("/star/{path:*}", func(x *X) {
+		x.writer.Write([]byte("star:" + x.PathParams.Get("path")))
+	})
+	r.Get("/plus/{path:+}", func(x *X) {
+		x.writer.Write([]byte("plus:" + x.PathParams.Get("path")))
+	})
+
+	cases := []struct {
+		path string
+		want string // 空 = 期望 404（不命中）
+	}{
+		{"/star", "star:"},
+		{"/star/a", "star:a"},
+		{"/star/a/b", "star:a/b"},
+		{"/plus", ""},
+		{"/plus/", ""},
+		{"/plus/a", "plus:a"},
+		{"/plus/a/b", "plus:a/b"},
+	}
+	for _, tt := range cases {
+		req, _ := http.NewRequest("GET", tt.path, nil)
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, req)
+		if tt.want == "" {
+			if w.Code != 404 {
+				t.Fatalf("%s: code = %d, want 404 (body %q)", tt.path, w.Code, w.Body.String())
+			}
+			continue
+		}
+		checkResponse(t, w, tt.want)
+		checkStatus(t, w, 200)
+	}
+}
+
 func TestRouter_Middleware(t *testing.T) {
 	r := NewRouter()
 
