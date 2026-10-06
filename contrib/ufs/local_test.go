@@ -178,6 +178,64 @@ func TestValidatePathSegmentLength(t *testing.T) {
 	}
 }
 
+// TestLocalFSErrorEchoesCallerPath 报错回显调用者传入的路径形态（含前导 '/'）：
+// localFS 内部去掉前导 '/' 只是为满足 fs.ValidPath 语义，但报错必须与调用者所见
+// 一致——上层（平台 fs 工具、ufs 使用者）按绝对路径组织，回显被去前缀的相对形态
+// 会让调用方无法定位（2026-10-07：fs read 报 "read u/admin/…: no such file…"）。
+func TestLocalFSErrorEchoesCallerPath(t *testing.T) {
+	lfs, _ := newLocalTestFS(t)
+	for _, c := range []struct {
+		op   string
+		path string
+		run  func(path string) error
+	}{
+		{"ReadFile", "/dir/absent.txt", func(p string) error { _, err := lfs.ReadFile(p); return err }},
+		{"Stat", "/dir/absent.txt", func(p string) error { _, err := lfs.Stat(p); return err }},
+		{"ReadDir", "/absent-dir", func(p string) error { _, err := lfs.ReadDir(p); return err }},
+		{"Open", "/absent-dir/absent.txt", func(p string) error { _, err := lfs.Open(p); return err }},
+	} {
+		err := c.run(c.path)
+		if err == nil {
+			t.Errorf("%s(%q) err = nil; want not-exist error", c.op, c.path)
+			continue
+		}
+		var pe *fs.PathError
+		if !errors.As(err, &pe) {
+			t.Errorf("%s(%q) err = %v (%T); want *fs.PathError", c.op, c.path, err, err)
+			continue
+		}
+		if pe.Path != c.path {
+			t.Errorf("%s 报错回显路径 = %q; want %q", c.op, pe.Path, c.path)
+		}
+		if !strings.Contains(err.Error(), c.path) {
+			t.Errorf("%s 报错文本 %q 未含调用者路径 %q", c.op, err.Error(), c.path)
+		}
+	}
+
+	// 无前导 '/' 的调用形态原样回显（不擅自绝对化）。
+	if err := func() error { _, err := lfs.Stat("dir/absent.txt"); return err }(); err == nil {
+		t.Error("Stat(relative absent) err = nil; want error")
+	} else {
+		var pe *fs.PathError
+		if !errors.As(err, &pe) || pe.Path != "dir/absent.txt" {
+			t.Errorf("相对路径回显 = %v; want PathError.Path = %q", err, "dir/absent.txt")
+		}
+	}
+
+	// 写失败同样回显调用者路径（目标为目录：原子替换必失败）。
+	if err := lfs.MkdirAll("/wdir", 0o755); err != nil {
+		t.Fatal(err)
+	}
+	err := lfs.WriteFile("/wdir", []byte("x"), 0o644)
+	if err == nil {
+		t.Fatal("WriteFile over a directory must fail")
+	}
+	var pe *fs.PathError
+	if !errors.As(err, &pe) || pe.Path != "/wdir" {
+		t.Errorf("WriteFile 报错 = %v; want PathError.Path = %q", err, "/wdir")
+	}
+}
+
 // TestLocalFSWriteFileAtomic 原子替换写语义：覆盖正确、既有权限保留、新文件
 // 用 perm、空内容可写、失败（目标为目录）报错，且成功/失败路径均无暂存残留。
 func TestLocalFSWriteFileAtomic(t *testing.T) {
