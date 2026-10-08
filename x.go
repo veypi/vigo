@@ -19,7 +19,9 @@ import (
 	"github.com/veypi/vigo/logv"
 )
 
-const version = "v0.7.6"
+// v0.8.0：contrib/event 的 TaskFunc 签名变更为 func(ctx context.Context) error
+// （破坏性），分布式锁改用 token 归属 + 续约 + 不按形态释放。
+const version = "v0.8.0"
 
 type Param struct {
 	Key   string
