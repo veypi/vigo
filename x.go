@@ -19,9 +19,11 @@ import (
 	"github.com/veypi/vigo/logv"
 )
 
+// v0.8.1：contrib/event 分布式锁按形态定释放策略（one-time 完成即放、周期钉回
+// tick 边界、daemon 返回即放），修周期跳拍 / one-time done 顺序 / daemon 重启回归。
 // v0.8.0：contrib/event 的 TaskFunc 签名变更为 func(ctx context.Context) error
-// （破坏性），分布式锁改用 token 归属 + 续约 + 不按形态释放。
-const version = "v0.8.0"
+// （破坏性），分布式锁改用 token 归属 + 续约。
+const version = "v0.8.1"
 
 type Param struct {
 	Key   string
