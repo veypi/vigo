@@ -179,10 +179,16 @@ func RestartOnFail() Option {
 //     node's own ticker run it — N executions per period). The remaining ttl is
 //     pinned back to the tick boundary after the run (pinLockScript), since the
 //     renewal watchdog would otherwise push the expiry past the next tick and
-//     skip a period whenever the task runs longer than interval/3. For periodic
-//     tasks the default ttl is therefore the interval; an explicit ttl shorter
-//     than the interval gives up the per-period guarantee (registration logs a
-//     warning).
+//     skip a period whenever the task runs longer than interval/3. Daemon tasks
+//     (RestartOnFail, no interval) release the lock on return — success or
+//     failure — so the backoff retry can re-acquire it: a stale self-held lock
+//     would make the retry look like a peer holds it, and the daemon loop would
+//     exit as if the task had succeeded. Crash paths never reach the release,
+//     so the TTL still bounds takeover. For periodic tasks the default ttl is
+//     therefore the interval; an explicit ttl shorter than the interval is
+//     tolerated (registration logs a warning): completed runs are still pinned
+//     to the tick boundary, but a crash mid-task lets a peer re-run within the
+//     same period once the short ttl lapses.
 //
 // One-time distributed tasks additionally use a persistent done marker
 // (vigo:event:done:{key}): checked before and after acquiring the lock, set on
@@ -238,7 +244,8 @@ func (e *EventManager) Add(key string, fn TaskFunc, opts ...Option) CancelFunc {
 	// Default lock TTL if not set but distributed is enabled.
 	// 周期任务：默认 = interval——锁要活到下一个 tick（执行结束后由 pinLockScript 钉
 	//回周期边界），才能保证「每周期集群一次」（完成即释放会让每个节点的 tick 各跑一遍）。
-	// 一次性任务：TTL 只是崩溃接管边界（续约跟着任务生命周期走），默认 30s 足够。
+	// 无 interval 的任务（one-time / daemon）：TTL 只是崩溃接管边界（续约跟着任务
+	// 生命周期走，正常结束即释放），默认 30s 足够。
 	if cfg.distributed && cfg.lockTTL == 0 {
 		if cfg.interval > 0 {
 			cfg.lockTTL = cfg.interval
@@ -246,11 +253,12 @@ func (e *EventManager) Add(key string, fn TaskFunc, opts ...Option) CancelFunc {
 			cfg.lockTTL = 30 * time.Second
 		}
 	}
-	// 周期任务的周期级去重靠「锁活过一个 interval」：显式 TTL 短于 interval 时
-	// 每个节点会各跑一遍（不是双活，但是 N 倍负载）——注册时就提醒，别到线上才发现。
+	// 周期任务的周期级去重靠「锁活到周期末」（完成后由 pinLockScript 钉回边界，与
+	// TTL 长短无关）：显式 TTL 短于 interval 的风险只剩「任务中途崩溃→短 TTL 提前
+	// 到期→他节点同周期补跑」（非双活的重复负载）——注册时就提醒，别到线上才发现。
 	if cfg.distributed && cfg.interval > 0 && cfg.lockTTL < cfg.interval {
 		logv.Warn().Str("id", key).Dur("ttl", cfg.lockTTL).Dur("interval", cfg.interval).
-			Msg("event: periodic distributed task has lock ttl < interval; it will run once per node per period (pass ttl >= interval for cluster-wide once-per-period)")
+			Msg("event: periodic distributed task has lock ttl < interval; a crash mid-task lets a peer re-run within the same period (pass ttl >= interval for the strictest once-per-period guarantee)")
 	}
 
 	item := &taskItem{
@@ -636,14 +644,14 @@ func (e *EventManager) executeTask(ctx context.Context, item *taskItem, source s
 
 		runErr := doRun(taskCtx)
 
-		// 释放策略按任务形态区分（2026-10-08 定稿，2026-10-10 补边界校正）：
+		// 释放策略按任务形态区分（2026-10-08 定稿，2026-10-10 补边界校正与 daemon 释放）：
 		//   - one-time：完成即释放（compare-token）。锁与 done 标记各司其职，
 		//     崩溃接管/重跑不必等 TTL。
 		//   - 周期任务：**保留锁到本周期结束**——周期级去重的载体是锁的存活时间
 		//     （默认 TTL=interval，见 Add），完成即释放会让每个节点的 tick 各自
 		//     拿到锁各跑一遍（N 倍执行）。
-		//   - daemon（RestartOnFail，无 interval）：保持「不释放、随 TTL 到期」——
-		//     它是长驻单活任务，按周期边界删锁会让下一个节点立刻双活。
+		//   - daemon（RestartOnFail，无 interval）：返回即释放——失败后的退避重试
+		//     必须能重新拿锁；崩溃路径走不到这里，接管仍由 TTL 兜底。
 		cancelTask()
 		// 续约彻底停止后再动锁：在途的 pexpire 可能晚于这里的写操作落地，
 		// 把刚钉好的过期时间又推后。
@@ -669,6 +677,13 @@ func (e *EventManager) executeTask(ctx context.Context, item *taskItem, source s
 			// 钉回边界后「每周期集群一次」精确成立；已跑满一周期的任务直接删锁。
 			leftMS := (item.cfg.interval - time.Since(start)).Milliseconds()
 			pinLockScript.Run(context.Background(), client, []string{lockKey}, token, leftMS)
+		default:
+			// daemon（RestartOnFail，无 interval）：返回即释放（成败都放）。留着
+			// 自持的残锁会让 1s 退避后的重试误判「他节点持有」——executeTask 返回
+			// nil，daemon 循环按「成功完成」退出（2026-10-10 实测：任务恒失败时
+			// 6s 只跑了 1 次，RestartOnFail 名存实亡）。释放时本任务已停止运行，
+			// SetNX 仍保证单活；崩溃走不到释放，接管边界仍由 TTL 兜底。
+			releaseLockScript.Run(context.Background(), client, []string{lockKey}, token)
 		}
 		return runErr
 	}
@@ -703,7 +718,11 @@ func (e *EventManager) processSerialTasks() {
 
 			// Create context for this task
 			ctx, cancel := context.WithCancel(e.ctx)
+			// item.cancel 的读写同锁（Cancel 在 e.mu 内读）：串行 worker 不在锁内，
+			// 必须显式加锁；startTask 的写入点则由调用方（Add/Start）在 e.mu 内完成。
+			e.mu.Lock()
 			item.cancel = cancel
+			e.mu.Unlock()
 
 			// Execute
 			e.executeTask(ctx, item, "serial")
@@ -715,6 +734,8 @@ func (e *EventManager) processSerialTasks() {
 	}
 }
 
+// startTask 由 Add/Start 调用，调用方持有 e.mu——item.cancel 的写入与
+// Cancel() 的读取同锁，不要在锁外直接调用本函数。
 func (e *EventManager) startTask(item *taskItem) {
 	ctx, cancel := context.WithCancel(e.ctx)
 	item.cancel = cancel

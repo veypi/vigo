@@ -1019,3 +1019,60 @@ func TestDistributedOneTimeWritesDoneBeforeReleasingLock(t *testing.T) {
 		t.Fatal("final state: done marker set, lock released")
 	}
 }
+
+// daemon（RestartOnFail）分布式任务返回即释放锁：失败后的 1s 退避重试必须能重新
+// 拿锁。回归：2026-10-10 前 daemon 不释放锁，重试时 SetNX 撞见自己上次残留的锁
+// → executeTask 返 nil（被当成「他节点持有，跳过」）→ daemon 循环按「成功完成」
+// 退出——任务恒失败时 6s 只跑了 1 次，RestartOnFail 名存实亡。
+func TestDistributedDaemonReleasesLockAndRestarts(t *testing.T) {
+	s := miniredis.NewMiniRedis()
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	rdb := redis.NewClient(&redis.Options{Addr: s.Addr()})
+
+	var counter int32
+	e := NewEventManager()
+	e.SetRedis(rdb)
+	e.Add("daemon_restart", func(context.Context) error {
+		atomic.AddInt32(&counter, 1)
+		return errors.New("boom") // 恒失败：RestartOnFail 应持续退避重跑
+	}, RestartOnFail(), Distributed(time.Minute))
+	e.Start()
+	defer e.Stop()
+
+	// 失败 → 1s 退避 → 重跑：3.5s 内应 ≥3 次；未修时恒为 1（循环已退出）。
+	time.Sleep(3500 * time.Millisecond)
+	if got := atomic.LoadInt32(&counter); got < 3 {
+		t.Fatalf("daemon ran %d times in 3.5s, want >= 3 — stale self-held lock made the retry look like a peer holds it and the daemon loop exited as if successful", got)
+	}
+}
+
+// daemon 成功返回同样释放锁：成功 = 任务终结，锁不应拖到 TTL 才消失。
+func TestDistributedDaemonSuccessReleasesLock(t *testing.T) {
+	s := miniredis.NewMiniRedis()
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	rdb := redis.NewClient(&redis.Options{Addr: s.Addr()})
+
+	var counter int32
+	e := NewEventManager()
+	e.SetRedis(rdb)
+	e.Add("daemon_once", func(context.Context) error {
+		atomic.AddInt32(&counter, 1)
+		return nil
+	}, RestartOnFail(), Distributed(time.Minute))
+	e.Start()
+	defer e.Stop()
+
+	time.Sleep(300 * time.Millisecond)
+	if got := atomic.LoadInt32(&counter); got != 1 {
+		t.Fatalf("daemon ran %d times, want exactly 1 (success ends the task)", got)
+	}
+	if s.Exists("vigo:event:lock:daemon_once") {
+		t.Fatal("lock still held after daemon succeeded — it should be released on return, not linger until TTL")
+	}
+}
