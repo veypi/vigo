@@ -855,3 +855,167 @@ func TestPanicReturnsError(t *testing.T) {
 		t.Fatalf("second Run should be skipped (executed), got %v", err)
 	}
 }
+
+// 周期任务执行期续约不得把锁推出 tick 边界（2026-10-10 回归）：
+// 任务时长 = interval/2（> ttl/3，必然触发一次续约）时，续约会把过期时刻推到
+// 「末次续约 + ttl」，晚于本周期结束（start + interval）→ 下一个 tick 被自己的锁
+// 跳掉（实测 1.2s 内只剩 4 次）。把剩余寿命钉回周期边界后应为 ~6 次。
+func TestDistributedPeriodicSlowTaskDoesNotSkipPeriod(t *testing.T) {
+	s := miniredis.NewMiniRedis()
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	rdb := redis.NewClient(&redis.Options{Addr: s.Addr()})
+
+	var counter int32
+	fn := func(ctx context.Context) error {
+		atomic.AddInt32(&counter, 1)
+		select {
+		case <-time.After(100 * time.Millisecond): // 半个周期：续约会发生一次
+		case <-ctx.Done():
+		}
+		return nil
+	}
+	opts := []Option{Every(200 * time.Millisecond), Distributed(0)} // 0 → 默认 TTL=interval
+
+	e1 := NewEventManager()
+	e1.SetRedis(rdb)
+	e1.Add("periodic_slow", fn, opts...)
+	e2 := NewEventManager()
+	e2.SetRedis(rdb)
+	e2.Add("periodic_slow", fn, opts...)
+
+	e1.Start()
+	time.Sleep(100 * time.Millisecond) // 相位差 = 半周期
+	e2.Start()
+
+	// miniredis 的时钟是虚拟的（不会自己走），跟真实睡眠同步推进 TTL。
+	done := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(20 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-done:
+				return
+			case <-ticker.C:
+				s.FastForward(20 * time.Millisecond)
+			}
+		}
+	}()
+	time.Sleep(1200 * time.Millisecond)
+	close(done)
+	e1.Stop()
+	e2.Stop()
+
+	val := atomic.LoadInt32(&counter)
+	if val < 5 {
+		t.Fatalf("periodic cadence broken: %d executions in ~1.2s (Every(200ms), task 100ms) — lock outlived the tick boundary (ideal ~6, un-pinned ~4)", val)
+	}
+	if val > 8 {
+		t.Fatalf("too many executions: %d", val)
+	}
+}
+
+// cmdOrderHook 记录客户端侧的命令顺序（顺序类断言用，不依赖时序竞态）。
+type cmdOrderHook struct {
+	mu  sync.Mutex
+	seq []string
+}
+
+func (h *cmdOrderHook) DialHook(next redis.DialHook) redis.DialHook { return next }
+
+func (h *cmdOrderHook) ProcessHook(next redis.ProcessHook) redis.ProcessHook {
+	return func(ctx context.Context, cmd redis.Cmder) error {
+		h.record(cmd)
+		return next(ctx, cmd)
+	}
+}
+
+func (h *cmdOrderHook) ProcessPipelineHook(next redis.ProcessPipelineHook) redis.ProcessPipelineHook {
+	return func(ctx context.Context, cmds []redis.Cmder) error {
+		for _, cmd := range cmds {
+			h.record(cmd)
+		}
+		return next(ctx, cmds)
+	}
+}
+
+func (h *cmdOrderHook) record(cmd redis.Cmder) {
+	args := cmd.Args()
+	if len(args) < 2 {
+		return
+	}
+	second, _ := args[1].(string)
+	switch strings.ToLower(cmd.Name()) {
+	case "set":
+		switch {
+		case strings.HasPrefix(second, doneKeyPrefix):
+			h.append("done")
+		case strings.HasPrefix(second, lockKeyPrefix):
+			h.append("lock")
+		}
+	case "eval":
+		switch {
+		case strings.Contains(second, `call("del"`):
+			h.append("release")
+		case strings.Contains(second, `call("pexpire"`):
+			h.append("extend")
+		}
+	}
+}
+
+func (h *cmdOrderHook) append(op string) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.seq = append(h.seq, op)
+}
+
+func (h *cmdOrderHook) snapshot() []string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]string(nil), h.seq...)
+}
+
+// done 标记必须先落、再释放锁（2026-10-10 修正顺序）：反序会留下「锁空闲但 done
+// 未落」的窗口（Exists→SetNX→Exists 三次往返量级），他节点抢到锁后查 done 为空，
+// 会把同一个 one-time 任务再跑一遍。顺序用客户端 hook 断言，不靠时序碰运气。
+func TestDistributedOneTimeWritesDoneBeforeReleasingLock(t *testing.T) {
+	s := miniredis.NewMiniRedis()
+	if err := s.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	rdb := redis.NewClient(&redis.Options{Addr: s.Addr()})
+	h := &cmdOrderHook{}
+	rdb.AddHook(h)
+
+	e := NewEventManager()
+	e.SetRedis(rdb)
+	e.Add("ordered_once", func(context.Context) error { return nil }, Distributed(time.Minute))
+
+	if err := e.Run("ordered_once"); err != nil {
+		t.Fatal(err)
+	}
+
+	seq := h.snapshot()
+	iDone, iRelease := -1, -1
+	for i, op := range seq {
+		if op == "done" && iDone < 0 {
+			iDone = i
+		}
+		if op == "release" && iRelease < 0 {
+			iRelease = i
+		}
+	}
+	if iDone < 0 || iRelease < 0 {
+		t.Fatalf("cmd sequence %v: want both done-marker set and lock release", seq)
+	}
+	if iDone > iRelease {
+		t.Fatalf("done marker written after lock release (sequence %v) — a peer node can grab the free lock, see no done marker and run the one-time task again", seq)
+	}
+	if !s.Exists("vigo:event:done:ordered_once") || s.Exists("vigo:event:lock:ordered_once") {
+		t.Fatal("final state: done marker set, lock released")
+	}
+}

@@ -51,11 +51,16 @@ const (
 	doneKeyPrefix = "vigo:event:done:"
 )
 
-// 锁续约/释放用 Lua 保证「归属性校验 + 操作」原子：token 不匹配 = 锁已易主，
+// 锁续约/释放/边界校正用 Lua 保证「归属性校验 + 操作」原子：token 不匹配 = 锁已易主，
 // 续约失败（返 0）触发任务 ctx 取消（防双活），释放失败（返 0）静默放弃。
 var (
 	renewLockScript   = redis.NewScript(`if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("pexpire", KEYS[1], ARGV[2]) else return 0 end`)
 	releaseLockScript = redis.NewScript(`if redis.call("get", KEYS[1]) == ARGV[1] then return redis.call("del", KEYS[1]) else return 0 end`)
+	// pinLockScript 周期任务的锁边界校正（2026-10-10）：ARGV[2] = 距本周期结束还剩
+	// 多少毫秒，把锁的过期时刻钉回 tick 边界（执行期续约会把它推后一个 ttl，导致
+	// 下一个 tick 被自己跳掉）。left <= 0（任务跑满一个周期以上）→ 删锁，下一个
+	// tick 立刻可跑。锁易主/已释放时 get 不匹配，返 0 静默放弃。
+	pinLockScript = redis.NewScript(`if redis.call("get", KEYS[1]) == ARGV[1] then local left = tonumber(ARGV[2]) if left > 0 then return redis.call("pexpire", KEYS[1], left) else return redis.call("del", KEYS[1]) end else return 0 end`)
 )
 
 // EventManager manages the lifecycle of background tasks.
@@ -164,14 +169,20 @@ func RestartOnFail() Option {
 //     no longer risk dual execution from TTL expiry.
 //   - Lock lost: if renewal finds the lock held by someone else (or Redis
 //     errors persist), the task's ctx is canceled to prevent dual-active.
-//   - Release: one-time tasks delete the lock immediately on completion
-//     (compare-token Lua), so a crash-takeover or a re-run never waits for the
-//     TTL. Periodic tasks keep the lock until it expires: the lock then spans a
-//     whole tick interval, which is what makes a periodic task run once per
-//     period cluster-wide (release-on-completion would let every node's own
-//     ticker run it — N executions per period). For periodic tasks the default
-//     ttl is therefore the interval; an explicit ttl shorter than the interval
-//     gives up the per-period guarantee (registration logs a warning).
+//   - Release: one-time tasks write the done marker first and delete the lock
+//     immediately after (compare-token Lua) — the order matters, releasing
+//     first would leave a window where another node finds a free lock and no
+//     done marker and runs the task a second time. A crash-takeover or a re-run
+//     never waits for the TTL. Periodic tasks keep the lock for the rest of the
+//     tick: it then spans a whole interval, which is what makes a periodic task
+//     run once per period cluster-wide (release-on-completion would let every
+//     node's own ticker run it — N executions per period). The remaining ttl is
+//     pinned back to the tick boundary after the run (pinLockScript), since the
+//     renewal watchdog would otherwise push the expiry past the next tick and
+//     skip a period whenever the task runs longer than interval/3. For periodic
+//     tasks the default ttl is therefore the interval; an explicit ttl shorter
+//     than the interval gives up the per-period guarantee (registration logs a
+//     warning).
 //
 // One-time distributed tasks additionally use a persistent done marker
 // (vigo:event:done:{key}): checked before and after acquiring the lock, set on
@@ -225,9 +236,9 @@ func (e *EventManager) Add(key string, fn TaskFunc, opts ...Option) CancelFunc {
 	}
 
 	// Default lock TTL if not set but distributed is enabled.
-	// 周期任务：默认 = interval——锁要活到下一个 tick，才能保证「每周期集群一次」
-	//（完成即释放会让每个节点的 tick 各跑一遍）。一次性任务：TTL 只是崩溃接管边界
-	//（续约跟着任务生命周期走），默认 30s 足够。
+	// 周期任务：默认 = interval——锁要活到下一个 tick（执行结束后由 pinLockScript 钉
+	//回周期边界），才能保证「每周期集群一次」（完成即释放会让每个节点的 tick 各跑一遍）。
+	// 一次性任务：TTL 只是崩溃接管边界（续约跟着任务生命周期走），默认 30s 足够。
 	if cfg.distributed && cfg.lockTTL == 0 {
 		if cfg.interval > 0 {
 			cfg.lockTTL = cfg.interval
@@ -577,6 +588,8 @@ func (e *EventManager) executeTask(ctx context.Context, item *taskItem, source s
 			// Lock held by another instance, skip execution
 			return nil
 		}
+		// 持锁起点：周期任务结束时用它把锁钉回本周期边界（见下方 pinLockScript）。
+		start := time.Now()
 
 		// 拿到锁后复查 done（check→lock 窗口内他节点可能已完成）。
 		if oneTime {
@@ -623,25 +636,39 @@ func (e *EventManager) executeTask(ctx context.Context, item *taskItem, source s
 
 		runErr := doRun(taskCtx)
 
-		// 释放策略按任务形态区分（2026-10-08 复核修正）：
+		// 释放策略按任务形态区分（2026-10-08 定稿，2026-10-10 补边界校正）：
 		//   - one-time：完成即释放（compare-token）。锁与 done 标记各司其职，
 		//     崩溃接管/重跑不必等 TTL。
-		//   - 周期任务：**不释放**，锁随 TTL 到期——周期级去重的载体是锁的存活
-		//     时间（默认 TTL=interval，见 Add），释放会让每个节点的 tick 各自
-		//     拿到锁各跑一遍（N 倍执行）。副作用：任务时长超过 interval 时，
-		//     最后一次续约会把锁再延长一个 TTL，最多跳过一个周期——比双活好。
+		//   - 周期任务：**保留锁到本周期结束**——周期级去重的载体是锁的存活时间
+		//     （默认 TTL=interval，见 Add），完成即释放会让每个节点的 tick 各自
+		//     拿到锁各跑一遍（N 倍执行）。
+		//   - daemon（RestartOnFail，无 interval）：保持「不释放、随 TTL 到期」——
+		//     它是长驻单活任务，按周期边界删锁会让下一个节点立刻双活。
 		cancelTask()
-		if oneTime {
-			releaseLockScript.Run(context.Background(), client, []string{lockKey}, token)
-		}
+		// 续约彻底停止后再动锁：在途的 pexpire 可能晚于这里的写操作落地，
+		// 把刚钉好的过期时间又推后。
 		<-watchdogDone
-
-		// one-time 成功落完成标记（无 TTL）：集群级「只成功一次」的去重依据。
-		// 崩溃/失败无标记 → 锁过期后他节点补跑（at-least-once，业务幂等）。
-		if oneTime && runErr == nil {
-			if err := client.Set(context.Background(), doneKey, time.Now().Format(time.RFC3339Nano), 0).Err(); err != nil {
-				logv.Warn().Err(err).Str("id", item.key).Msg("event: write done marker failed; one-time task may re-run on other nodes")
+		switch {
+		case oneTime:
+			// done 标记必须先落、再释放锁（2026-10-10 修正顺序）：反序会出现
+			// 「锁空闲但 done 未落」的窗口（Exists→SetNX→Exists 三次往返量级），
+			// 他节点抢到锁后查 done 为空，会把同一个任务再跑一遍。
+			// 无 TTL：集群级「只成功一次」的去重依据；崩溃/失败无标记 →
+			// 锁过期后他节点补跑（at-least-once，业务幂等）。
+			if runErr == nil {
+				if err := client.Set(context.Background(), doneKey, time.Now().Format(time.RFC3339Nano), 0).Err(); err != nil {
+					logv.Warn().Err(err).Str("id", item.key).Msg("event: write done marker failed; one-time task may re-run on other nodes")
+				}
 			}
+			releaseLockScript.Run(context.Background(), client, []string{lockKey}, token)
+		case item.cfg.interval > 0:
+			// 边界校正：执行期每 ttl/3 续约一次，会把过期时刻推到「末次续约 + ttl」，
+			// 晚于本周期结束（start + interval）→ 下一个 tick 被自己的锁跳掉。
+			// 默认 ttl = interval，所以任务时长 ≥ interval/3 就会发生（2026-10-10
+			// 实测 interval=200ms、任务 100ms：1.2s 内 4 次，应为 6 次）。
+			// 钉回边界后「每周期集群一次」精确成立；已跑满一周期的任务直接删锁。
+			leftMS := (item.cfg.interval - time.Since(start)).Milliseconds()
+			pinLockScript.Run(context.Background(), client, []string{lockKey}, token, leftMS)
 		}
 		return runErr
 	}
