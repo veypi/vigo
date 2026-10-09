@@ -30,7 +30,7 @@ import (
 func main() {
     // Add a periodic local task (runs every 10 seconds)
     // Key is empty string "" for local-only tasks
-    event.Add("", func() error {
+    event.Add("", func(ctx context.Context) error {
         println("Local tick")
         return nil
     }, event.Every(10*time.Second))
@@ -65,17 +65,24 @@ func main() {
 
     // 2. Add a distributed task
     // - Key: "daily_report" (MUST be unique and consistent across nodes)
-    // - Distributed: Sets lock TTL (e.g., 5 minutes)
-    event.Add("daily_report", func() error {
+    // - Distributed: Sets lock TTL (e.g., 30 minutes)
+    event.Add("daily_report", func(ctx context.Context) error {
         println("Generating daily report...")
         // ... heavy lifting ...
         return nil
-    }, event.Every(24*time.Hour), event.Distributed(5*time.Minute))
+    }, event.Every(24*time.Hour), event.Distributed(24*time.Hour))
 
     event.Start()
     defer event.Stop()
 }
 ```
+
+**Distributed lock semantics** (since the 2026-10-08 rewrite):
+
+- **TTL is a crash-recovery bound, not a task-duration estimate.** A watchdog renews the lock every `ttl/3` while the task runs, so long-running tasks are safe with a short TTL. If the holding node crashes, another node takes over after the TTL expires.
+- **One-time tasks release the lock on completion** (token-checked, done marker written *before* the release so another node can never see a free lock with no marker). **Periodic tasks keep the lock until the end of the tick**: that is what makes a periodic task run once per period cluster-wide. For periodic tasks the default TTL is the interval — pass an explicit `ttl >= interval` for the strictest once-per-period guarantee (a shorter explicit TTL logs a warning at registration: completed runs are still pinned to the tick boundary, but a crash mid-task lets a peer re-run within the same period once the short TTL lapses). The remaining TTL is re-pinned to the tick boundary after each run, so a task that runs longer than `interval/3` (which triggers a renewal) does not skip the next period. **Daemon tasks (RestartOnFail, no interval) release the lock on return** — success or failure — so the backoff retry can re-acquire it (a stale self-held lock would make the retry look like a peer holds it and the daemon loop would exit as if successful); a crashed holder is still bounded by the TTL. Note there is no standby failover: a node that finds the lock already held skips the run (and a daemon loop treats that skip as success and exits), so only the first holder keeps the daemon alive.
+- **Lock loss cancels the task**: if renewal finds the lock stolen (or Redis persistently errors), the task's `ctx` is canceled to prevent dual-active execution. Tasks should respect `ctx`.
+- **One-time distributed tasks are deduplicated cluster-wide** via a persistent done marker (`vigo:event:done:{key}`): checked before and after lock acquisition, written on success. A crash before the marker is written means another node reruns the task later — execution is **at-least-once**, so keep task logic idempotent.
 
 ### 3. Task Options
 
@@ -84,8 +91,8 @@ func main() {
 | `event.Every(d)` | Run task periodically every `d` duration. | `event.Every(1 * time.Hour)` |
 | `event.At(t)` | Run task once at specific time `t`. | `event.At(time.Now().Add(10*time.Minute))` |
 | `event.RestartOnFail()` | Restart task automatically if it returns an error (daemon mode). | `event.RestartOnFail()` |
-| `event.Distributed(ttl)` | Use Redis distributed lock. `ttl` is lock expiration time. | `event.Distributed(30 * time.Second)` |
-| `event.After(key)` | Run task only after `key` task completes successfully. Invalid for periodic/scheduled tasks. | `event.After("init_task")` |
+| `event.Distributed(ttl)` | Use Redis distributed lock with token + renewal + form-specific release (one-time: on completion; periodic: pinned to tick end; daemon: on return). `ttl` is the crash-recovery bound (renewed while running); for periodic tasks use `ttl >= interval` (default: the interval). | `event.Distributed(30 * time.Second)` |
+| `event.After(key)` | Run task after `key` task finishes (success, failure or panic — ordering, not success dependency). Invalid for periodic/scheduled tasks. | `event.After("init_task")` |
 | `event.Before(key)` | Run task before `key` task starts. Invalid for periodic/scheduled tasks. | `event.Before("final_task")` |
 
 ### 4. Task Execution Order
@@ -116,7 +123,7 @@ Registers a task.
   - If `""`: Local task (runs on every node).
   - If `"name"`: Distributed task (runs on one node if `Distributed` option is used).
   - **Warning**: Do not use the same key for different tasks. If a key duplicates, the second task is ignored.
-- **fn**: The function to execute (`func() error`).
+- **fn**: The function to execute (`func(ctx context.Context) error`). The context is canceled on `Stop()`, `Cancel(key)`, or when a distributed task loses its lock mid-run — respect it for graceful shutdown.
 - **Returns**: A function to cancel this specific task.
 
 ### `Start()` / `Stop()`
@@ -138,4 +145,6 @@ Returns a list of all registered task keys.
 
 ### `Clear() error`
 
-Removes all distributed locks from Redis for registered tasks. Useful for cleanup or resetting state.
+Removes all distributed locks **and one-time done markers** from Redis for registered tasks.
+
+**Danger**: no ownership check — locks held by tasks currently running on other nodes are deleted too (risking concurrent execution), and removing a done marker lets a one-time task re-run. Use only during a cluster-wide maintenance window.
