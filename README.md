@@ -1,7 +1,7 @@
 # Vigo
 
 [![Go Version](https://img.shields.io/badge/Go-%3E%3D%201.24-blue)](https://golang.org)
-[![License](https://img.shields.io/badge/license-Apache%202.0-green)](LICENSE)
+[![License](https://img.shields.io/badge/license-MIT-green)](LICENSE)
 
 Vigo 是一个高性能、简洁易用的 Go Web 框架，专为构建现代 RESTful API 而设计。它提供了强大的路由系统、智能参数解析、灵活的中间件机制。
 
