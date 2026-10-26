@@ -280,6 +280,13 @@ router.Use(compress.New().Handler)
 - **x.Stop()**: 停止流水线，后续 Handler 不再执行。
 - **返回 error**: 停止流水线，并将 error 传递给后续的 `FuncErr` 类型的 Handler 进行处理。
 
+## 📚 文档
+
+- 文档地图：[docs/index.md](docs/index.md)
+- 架构设计：[docs/architecture/overview.md](docs/architecture/overview.md)
+- 后端开发规范：[AGENTS.md](AGENTS.md)；变更记录：[CHANGELOG.md](CHANGELOG.md)
+- contrib 使用指南：[contrib/USAGE.md](contrib/USAGE.md)
+
 ## 📝 技术栈约束
 
 - **框架**: vigo (github.com/veypi/vigo)

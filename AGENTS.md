@@ -16,6 +16,15 @@ Vigo follows an **Onion Architecture** with clear separation of concerns:
 
 For detailed API documentation, use: `go doc github.com/veypi/vigo.X`
 
+## Documentation Layout
+
+Unified across the ivec repos: `README.md` / `CHANGELOG.md` / `AGENTS.md` at the root,
+everything else under `docs/` with [docs/index.md](docs/index.md) as the map and
+`architecture/` / `reference/` / `guides/` / `development/` as the only categories.
+Design truth lives in `docs/architecture/overview.md`; completed changes go to the root
+CHANGELOG (versions are git tags), future plans only to `docs/development/todo.md`.
+contrib documentation stays next to its module.
+
 ---
 
 ## 1. Request Pipeline
