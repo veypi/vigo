@@ -20,6 +20,15 @@ type File interface {
 	io.Seeker
 }
 
+// ExpectedHashHeader 是可选的内容哈希写条件；与 HTTP 缓存 ETag/If-Match 无关。
+const ExpectedHashHeader = "X-FS-Expected-Hash"
+
+// ContentHashWriter 在文件系统内部完成内容哈希校验与原子替换，避免 HTTP 层
+// read-check-then-write 的并发窗口。expectedHash 由读取方根据所读内容计算。
+type ContentHashWriter interface {
+	WriteFileIfHash(name, expectedHash string, data []byte, perm fs.FileMode) error
+}
+
 // FS 可写文件系统接口
 type FS interface {
 	fs.FS

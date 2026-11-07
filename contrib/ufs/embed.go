@@ -96,8 +96,8 @@ func (f *embedFS) Search(path, glob, pattern string, limit int, ignoreCase bool)
 	return Search(f, path, glob, pattern, limit, ignoreCase)
 }
 
-// generateETag generates an ETag based on file size and modTime.
-// Uses zero-cost format: "{modTime}-{size}" for efficient caching without hash computation.
+// generateETag uses nanosecond mtime + size for HTTP cache revalidation only.
+// Conditional content writes use SHA-256 independently of this validator.
 func generateETag(size int64, modTime time.Time) string {
-	return fmt.Sprintf(`"%d-%d"`, modTime.Unix(), size)
+	return fmt.Sprintf(`"%d-%d"`, modTime.UnixNano(), size)
 }

@@ -8,18 +8,28 @@
 package ufs
 
 import (
+	"crypto/sha256"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
+	"sync"
 )
 
 // ErrSymlinkNotSupported 表示路径含符号链接：localFS 是受控虚拟文件系统根，
 // 不支持下层文件系统的符号链接（os 调用会跟随 symlink，可越权访问根外文件）。
 // 任何路径段为 symlink 的操作一律拒绝（fail-closed），写入侧亦无创建 symlink 的 API。
 var ErrSymlinkNotSupported = errors.New("ufs: symlinks are not supported")
+
+// ErrHashConflict 表示条件写入的基准内容已被其他写入替换。
+var ErrHashConflict = errors.New("ufs: file hash conflict")
+
+// ErrInvalidHash 表示写条件不是规范的 sha256:<64 位小写十六进制>。
+var ErrInvalidHash = errors.New("ufs: invalid content hash")
 
 // MaxNameSegmentLen 是 UFS 路径单段名称长度的硬上限（字节）。所有 UFS 操作
 // 读写一视同仁，超出即拒绝（fail-closed）。连锁约束：skill 注册名 ≤32、
@@ -101,8 +111,15 @@ func fsErr(err error, op, name string) error {
 }
 
 // localFS implements FS interface for local file system
+type localPathLock struct {
+	mu   sync.Mutex
+	refs int
+}
+
 type localFS struct {
-	root string
+	root    string
+	locksMu sync.Mutex
+	locks   map[string]*localPathLock
 }
 
 // NewLocalFS creates a new local file system with full read-write support
@@ -110,7 +127,48 @@ func NewLocalFS(root string) (FS, error) {
 	if err := os.MkdirAll(root, 0o755); err != nil {
 		return nil, err
 	}
-	return &localFS{root: root}, nil
+	return &localFS{root: root, locks: map[string]*localPathLock{}}, nil
+}
+
+// lockPaths 串行化同一 localFS 上的内容变更；引用计数保证锁释放后不留路径垃圾。
+func (f *localFS) lockPaths(names ...string) func() {
+	keys := append([]string(nil), names...)
+	sort.Strings(keys)
+	locks := make([]*localPathLock, 0, len(keys))
+	f.locksMu.Lock()
+	for i, key := range keys {
+		if i > 0 && key == keys[i-1] {
+			continue
+		}
+		lock := f.locks[key]
+		if lock == nil {
+			lock = &localPathLock{}
+			f.locks[key] = lock
+		}
+		lock.refs++
+		locks = append(locks, lock)
+	}
+	f.locksMu.Unlock()
+	for _, lock := range locks {
+		lock.mu.Lock()
+	}
+	return func() {
+		for i := len(locks) - 1; i >= 0; i-- {
+			locks[i].mu.Unlock()
+		}
+		f.locksMu.Lock()
+		defer f.locksMu.Unlock()
+		for i, key := range keys {
+			if i > 0 && key == keys[i-1] {
+				continue
+			}
+			lock := f.locks[key]
+			lock.refs--
+			if lock.refs == 0 {
+				delete(f.locks, key)
+			}
+		}
+	}
 }
 
 func (f *localFS) Open(name string) (fs.File, error) {
@@ -166,6 +224,8 @@ func (f *localFS) Create(name string) (File, error) {
 	if err != nil {
 		return nil, err
 	}
+	unlock := f.lockPaths(inner)
+	defer unlock()
 	if err := f.checkNoSymlink(inner, shown, "create"); err != nil {
 		return nil, err
 	}
@@ -193,6 +253,8 @@ func (f *localFS) RemoveAll(path string) error {
 	if err != nil {
 		return err
 	}
+	unlock := f.lockPaths(inner)
+	defer unlock()
 	if err := f.checkNoSymlink(inner, shown, "remove"); err != nil {
 		return err
 	}
@@ -208,6 +270,8 @@ func (f *localFS) Rename(oldname, newname string) error {
 	if err != nil {
 		return err
 	}
+	unlock := f.lockPaths(oldInner, newInner)
+	defer unlock()
 	if err := f.checkNoSymlink(oldInner, oldShown, "rename"); err != nil {
 		return err
 	}
@@ -234,6 +298,12 @@ func (f *localFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	if err != nil {
 		return err
 	}
+	unlock := f.lockPaths(inner)
+	defer unlock()
+	return f.writeFileLocked(inner, shown, data, perm)
+}
+
+func (f *localFS) writeFileLocked(inner, shown string, data []byte, perm fs.FileMode) error {
 	if err := f.checkNoSymlink(inner, shown, "write"); err != nil {
 		return err
 	}
@@ -272,4 +342,67 @@ func (f *localFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 		return fsErr(err, "write", shown)
 	}
 	return nil
+}
+
+func contentHash(data []byte) string {
+	return fmt.Sprintf("sha256:%x", sha256.Sum256(data))
+}
+
+func fileContentHash(path string) (string, error) {
+	file, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer file.Close()
+	hash := sha256.New()
+	if _, err := io.Copy(hash, file); err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("sha256:%x", hash.Sum(nil)), nil
+}
+
+func validContentHash(value string) bool {
+	if len(value) != 71 || !strings.HasPrefix(value, "sha256:") {
+		return false
+	}
+	for _, c := range value[len("sha256:"):] {
+		if c >= '0' && c <= '9' || c >= 'a' && c <= 'f' {
+			continue
+		}
+		return false
+	}
+	return true
+}
+
+// WriteFileIfHash 持有同路径写锁完成内容校验与替换；其他 WriteFile/Rename/RemoveAll
+// 使用同一把锁，因此不会在检查后、提交前插入另一次本地写入。
+func (f *localFS) WriteFileIfHash(name, expectedHash string, data []byte, perm fs.FileMode) error {
+	if !validContentHash(expectedHash) {
+		return ErrInvalidHash
+	}
+	inner, shown, err := validatePathEcho(name, "write")
+	if err != nil {
+		return err
+	}
+	unlock := f.lockPaths(inner)
+	defer unlock()
+	if err := f.checkNoSymlink(inner, shown, "write"); err != nil {
+		return err
+	}
+	filePath := filepath.Join(f.root, inner)
+	info, err := os.Stat(filePath)
+	if err != nil {
+		return fsErr(err, "write", shown)
+	}
+	if info.IsDir() {
+		return &fs.PathError{Op: "write", Path: shown, Err: fs.ErrInvalid}
+	}
+	currentHash, err := fileContentHash(filePath)
+	if err != nil {
+		return fsErr(err, "write", shown)
+	}
+	if currentHash != expectedHash {
+		return &fs.PathError{Op: "write", Path: shown, Err: ErrHashConflict}
+	}
+	return f.writeFileLocked(inner, shown, data, perm)
 }

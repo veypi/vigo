@@ -541,6 +541,12 @@ func handleHead(x *vigo.X, filesystem fs.FS, options *HandlerOptions) {
 // Write handlers
 // =============================================================================
 
+func writeHashError(x *vigo.X, status int, code, message string) {
+	x.Header().Set("Content-Type", "application/json; charset=utf-8")
+	x.WriteHeader(status)
+	_ = x.JSON(map[string]string{"code": code, "message": message})
+}
+
 func handlePut(x *vigo.X, filesystem FS, options *HandlerOptions) {
 	p, err := resolvePath(x, "write", options.PathFunc)
 	if err != nil {
@@ -570,6 +576,33 @@ func handlePut(x *vigo.X, filesystem FS, options *HandlerOptions) {
 		return
 	}
 
+	expectedHash := strings.TrimSpace(x.Request.Header.Get(ExpectedHashHeader))
+	if expectedHash != "" {
+		writer, ok := filesystem.(ContentHashWriter)
+		if !ok {
+			x.WriteHeader(http.StatusNotImplemented)
+			return
+		}
+		writeErr := writer.WriteFileIfHash(p, expectedHash, body, 0o644)
+		if writeErr != nil {
+			switch {
+			case errors.Is(writeErr, ErrInvalidHash):
+				writeHashError(x, http.StatusBadRequest, "invalid_file_hash", "Expected content hash must be sha256:<64 lowercase hex>")
+			case errors.Is(writeErr, ErrHashConflict), errors.Is(writeErr, fs.ErrNotExist):
+				writeHashError(x, http.StatusPreconditionFailed, "file_hash_conflict", "File content has changed since it was read")
+			case errors.Is(writeErr, fs.ErrPermission):
+				x.WriteHeader(http.StatusForbidden)
+			case errors.Is(writeErr, fs.ErrInvalid):
+				x.WriteHeader(http.StatusConflict)
+			default:
+				x.WriteHeader(http.StatusInternalServerError)
+			}
+			return
+		}
+		x.WriteHeader(http.StatusCreated)
+		return
+	}
+
 	if err := filesystem.WriteFile(p, body, 0o644); err != nil {
 		if errors.Is(err, fs.ErrPermission) {
 			x.WriteHeader(http.StatusForbidden)
@@ -578,7 +611,6 @@ func handlePut(x *vigo.X, filesystem FS, options *HandlerOptions) {
 		x.WriteHeader(http.StatusInternalServerError)
 		return
 	}
-
 	x.WriteHeader(http.StatusCreated)
 }
 

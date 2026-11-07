@@ -301,3 +301,45 @@ func TestLocalFSWriteFileAtomic(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestLocalFSWriteFileIfHash(t *testing.T) {
+	lfs, _ := newLocalTestFS(t)
+	writer := lfs.(ContentHashWriter)
+	if err := lfs.WriteFile("hashed.txt", []byte("v1"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	baseHash := contentHash([]byte("v1"))
+	if err := writer.WriteFileIfHash("hashed.txt", contentHash([]byte("v2")), []byte("bad"), 0o644); !errors.Is(err, ErrHashConflict) {
+		t.Fatalf("stale write err = %v, want ErrHashConflict", err)
+	}
+	if err := writer.WriteFileIfHash("hashed.txt", "not-a-hash", []byte("bad"), 0o644); !errors.Is(err, ErrInvalidHash) {
+		t.Fatalf("invalid hash err = %v, want ErrInvalidHash", err)
+	}
+	if data, err := lfs.ReadFile("hashed.txt"); err != nil || string(data) != "v1" {
+		t.Fatalf("stale write changed content: %q, %v", data, err)
+	}
+
+	// 同一内容基准的并发写入只允许一个获胜；校验和替换共享同一路径锁。
+	const writers = 8
+	results := make(chan error, writers)
+	for i := 0; i < writers; i++ {
+		go func(i int) {
+			results <- writer.WriteFileIfHash("hashed.txt", baseHash, []byte{byte('a' + i)}, 0o644)
+		}(i)
+	}
+	succeeded := 0
+	for i := 0; i < writers; i++ {
+		err := <-results
+		if err == nil {
+			succeeded++
+		} else if !errors.Is(err, ErrHashConflict) {
+			t.Fatalf("concurrent conditional write err = %v", err)
+		}
+	}
+	if succeeded != 1 {
+		t.Fatalf("conditional writers succeeded = %d, want 1", succeeded)
+	}
+	if locks := len(lfs.(*localFS).locks); locks != 0 {
+		t.Fatalf("path locks leaked: %d", locks)
+	}
+}
