@@ -3,7 +3,7 @@
 版本以 git tag（`vX.Y.Z`）为准，遵循 SemVer。本文只记录已完成变更，未来计划写入
 [docs/development/todo.md](docs/development/todo.md)。v0.8.2 之前的历史见 git 记录。
 
-## 未发布
+## 0.8.3 — 2026-11-07
 
 - **ufs 内容哈希条件写入（`X-FS-Expected-Hash`）**：`FS` 增加可选接口 `ContentHashWriter`
   （`WriteFileIfHash`），HTTP `PUT` 带 `X-FS-Expected-Hash: sha256:<64 位小写十六进制>` 时
